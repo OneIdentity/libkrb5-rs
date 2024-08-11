@@ -63,7 +63,7 @@ impl<'a> Krb5Creds<'a> {
         Some(ticket)
     }
 
-    pub fn keyblock(&mut self) -> Krb5Keyblock {
+    pub fn keyblock(&self) -> Krb5Keyblock {
         Krb5Keyblock::from_c(&self.creds.keyblock)
     }
 }
@@ -76,6 +76,7 @@ impl<'a> Drop for Krb5Creds<'a> {
     }
 }
 
+#[derive(Clone)]
 pub struct Krb5Keyblock {
     magic: krb5_magic,
     pub(crate) enctype: krb5_enctype,

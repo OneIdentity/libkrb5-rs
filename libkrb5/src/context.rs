@@ -1,3 +1,4 @@
+use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 use std::sync::Mutex;
@@ -5,6 +6,7 @@ use std::sync::Mutex;
 use lazy_static::lazy_static;
 use libkrb5_sys::*;
 
+use crate::credential::Krb5Keyblock;
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::principal::Krb5Principal;
 use crate::strconv::{c_string_to_string, string_to_c_string};
@@ -182,6 +184,40 @@ impl Krb5Context {
         Ok(realms)
     }
 
+    pub fn verify_ap_req<'a>(
+        &self,
+        auth_context: &'a mut Krb5AuthContext,
+        ap_req: &'a [u8],
+        server: &'a Krb5Principal,
+    ) -> Result<(i32, Krb5Ticket), Krb5Error> {
+        let data = krb5_data {
+            magic: 0,
+            data: ap_req.as_ptr() as *mut i8,
+            length: ap_req.len() as u32,
+        };
+        let mut ap_req_options: krb5_flags = 0;
+        let mut ticket_ptr: MaybeUninit<*mut krb5_ticket> = MaybeUninit::zeroed();
+        let code = unsafe {
+            krb5_rd_req(
+                self.context,
+                &mut auth_context.auth_context,
+                &data,
+                server.principal,
+                std::ptr::null_mut(),
+                &mut ap_req_options,
+                ticket_ptr.as_mut_ptr(),
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let ticket = Krb5Ticket {
+            context: self,
+            ticket: unsafe { ticket_ptr.assume_init() },
+        };
+
+        Ok((ap_req_options, ticket))
+    }
+
     // TODO: this produces invalid UTF-8?
     /*
     pub fn expand_hostname(&self, hostname: &str) -> Result<String, Krb5Error> {
@@ -220,5 +256,62 @@ impl Drop for Krb5Context {
             .expect("Failed to lock context for de-initialization.");
 
         unsafe { krb5_free_context(self.context) };
+    }
+}
+
+#[derive(Debug)]
+pub struct Krb5AuthContext<'a> {
+    pub(crate) context: &'a Krb5Context,
+    pub(crate) auth_context: krb5_auth_context,
+}
+
+impl<'a> Krb5AuthContext<'a> {
+    pub fn new(context: &'a Krb5Context, session_key: Option<&Krb5Keyblock>) -> Result<Krb5AuthContext<'a>, Krb5Error> {
+        let mut auth_context_ptr: MaybeUninit<krb5_auth_context> = MaybeUninit::zeroed();
+
+        let code: krb5_error_code = unsafe { krb5_auth_con_init(context.context, auth_context_ptr.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(context, code)?;
+
+        let auth_context = Krb5AuthContext {
+            context: &context,
+            auth_context: unsafe { auth_context_ptr.assume_init() },
+        };
+
+        match session_key {
+            Some(keyblock) => {
+                auth_context.set_userkey(keyblock)?;
+            },
+            None => {},
+        }
+
+        Ok(auth_context)
+    }
+
+    pub fn set_userkey(&self, keyblock: &Krb5Keyblock) -> Result<(), Krb5Error> {
+        let mut keyblock = keyblock.to_owned();
+        let code: krb5_error_code =
+            unsafe { krb5_auth_con_setuseruserkey(self.context.context, self.auth_context, keyblock.to_c()) };
+        krb5_error_code_escape_hatch(self.context, code)?;
+
+        Ok(())
+    }
+}
+
+impl<'a> Drop for Krb5AuthContext<'a> {
+    fn drop(&mut self) {
+        unsafe { krb5_auth_con_free(self.context.context, self.auth_context) };
+    }
+}
+#[derive(Debug)]
+pub struct Krb5Ticket<'a> {
+    context: &'a Krb5Context,
+    ticket: *mut krb5_ticket,
+}
+
+impl<'a> Drop for Krb5Ticket<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            krb5_free_ticket(self.context.context, self.ticket);
+        }
     }
 }
