@@ -6,6 +6,8 @@ pub use cccol::Krb5CCCol;
 
 mod context;
 pub use context::Krb5Context;
+mod credential;
+pub use credential::{Krb5Creds, Krb5Keyblock};
 
 mod error;
 pub use error::Krb5Error;

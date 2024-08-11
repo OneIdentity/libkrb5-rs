@@ -148,8 +148,6 @@ impl Krb5Context {
     }
 
     pub fn get_host_realms(&self, host: Option<&str>) -> Result<Vec<String>, Krb5Error> {
-
-
         let c_host = string_to_c_string(host.unwrap_or(""))?;
 
         let c_host_ptr = if c_host.is_empty() {
