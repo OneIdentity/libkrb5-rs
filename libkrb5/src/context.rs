@@ -218,6 +218,17 @@ impl Krb5Context {
         Ok((ap_req_options, ticket))
     }
 
+    pub fn create_ap_rep<'a>(&self, auth_context: &'a Krb5AuthContext) -> Result<&[u8], Krb5Error> {
+        let mut ap_rep_ptr: MaybeUninit<krb5_data> = MaybeUninit::zeroed();
+        let code = unsafe { krb5_mk_rep(self.context, auth_context.auth_context, ap_rep_ptr.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let ap_rep_ptr = unsafe { ap_rep_ptr.assume_init() };
+        let ap_rep = unsafe { slice::from_raw_parts(ap_rep_ptr.data as *mut u8, ap_rep_ptr.length as usize) };
+
+        Ok(ap_rep)
+    }
+
     // TODO: this produces invalid UTF-8?
     /*
     pub fn expand_hostname(&self, hostname: &str) -> Result<String, Krb5Error> {
