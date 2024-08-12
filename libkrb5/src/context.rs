@@ -1,3 +1,4 @@
+use core::slice;
 use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
@@ -120,6 +121,21 @@ impl Krb5Context {
             _ => return Err(Krb5Error::MaxVarArgsExceeded),
         };
 
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let principal = Krb5Principal {
+            context: self,
+            principal: unsafe { principal_ptr.assume_init() },
+        };
+
+        Ok(principal)
+    }
+
+    pub fn parse_principal(&self, name: &str) -> Result<Krb5Principal, Krb5Error> {
+        let c_name = string_to_c_string(name)?;
+        let mut principal_ptr: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
+
+        let code = unsafe { krb5_parse_name(self.context, c_name.as_ptr(), principal_ptr.as_mut_ptr()) };
         krb5_error_code_escape_hatch(self, code)?;
 
         let principal = Krb5Principal {
