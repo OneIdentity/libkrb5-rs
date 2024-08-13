@@ -8,7 +8,7 @@ mod context;
 pub use context::{Krb5AuthContext, Krb5Context};
 
 mod credential;
-pub use credential::{Krb5Creds, Krb5Keyblock};
+pub use credential::{Krb5Creds, Krb5Keyblock, Krb5Keytab};
 
 mod error;
 pub use error::Krb5Error;

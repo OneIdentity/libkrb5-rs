@@ -7,8 +7,39 @@ use crate::strconv::{c_string_to_string, string_to_c_string};
 use crate::{Krb5Context, Krb5Principal};
 use libkrb5_sys::{
     krb5_context, krb5_creds, krb5_enctype, krb5_error_code, krb5_free_cred_contents, krb5_get_init_creds_keytab,
-    krb5_keyblock, krb5_keytab, krb5_kt_resolve, krb5_magic,
+    krb5_keyblock, krb5_keytab, krb5_keytab_entry, krb5_kt_add_entry, krb5_kt_close, krb5_kt_resolve, krb5_magic,
 };
+
+pub struct Krb5Keytab<'a> {
+    pub(crate) context: &'a Krb5Context,
+    pub(crate) keytab: krb5_keytab,
+}
+
+impl<'a> Drop for Krb5Keytab<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            krb5_kt_close(self.context.context, self.keytab);
+        }
+    }
+}
+
+impl<'a> Krb5Keytab<'a> {
+    pub fn new(context: &'a Krb5Context, keytab_path: &str) -> Result<Krb5Keytab<'a>, Krb5Error> {
+        let mut keytab_ptr: MaybeUninit<krb5_keytab> = MaybeUninit::zeroed();
+        let keytab_path = string_to_c_string(keytab_path)?;
+        let code: krb5_error_code =
+            unsafe { krb5_kt_resolve(context.context, keytab_path.as_ptr(), keytab_ptr.as_mut_ptr()) };
+
+        krb5_error_code_escape_hatch(context, code)?;
+
+        let keytab = Krb5Keytab {
+            context: &context,
+            keytab: unsafe { keytab_ptr.assume_init() },
+        };
+
+        Ok(keytab)
+    }
+}
 
 pub struct Krb5Creds<'a> {
     pub(crate) context: &'a Krb5Context,
@@ -18,25 +49,16 @@ pub struct Krb5Creds<'a> {
 impl<'a> Krb5Creds<'a> {
     pub fn get_init_creds_keytab(
         context: &'a Krb5Context,
-        keytab_name: &'a str,
-        principal: Krb5Principal,
+        keytab: &Krb5Keytab,
+        principal: &Krb5Principal,
     ) -> Result<Krb5Creds<'a>, Krb5Error> {
-        let mut keytab_ptr: MaybeUninit<krb5_keytab> = MaybeUninit::zeroed();
-        let keytab_name = string_to_c_string(keytab_name)?;
-        let code: krb5_error_code =
-            unsafe { krb5_kt_resolve(context.context, keytab_name.as_ptr(), keytab_ptr.as_mut_ptr()) };
-
-        krb5_error_code_escape_hatch(context, code)?;
-
-        let keytab = unsafe { keytab_ptr.assume_init() };
-
         let mut creds_ptr: MaybeUninit<krb5_creds> = MaybeUninit::zeroed();
         let code = unsafe {
             krb5_get_init_creds_keytab(
                 context.context,
                 creds_ptr.as_mut_ptr(),
                 principal.principal,
-                keytab,
+                keytab.keytab,
                 0,
                 null_mut(),
                 null_mut(),
