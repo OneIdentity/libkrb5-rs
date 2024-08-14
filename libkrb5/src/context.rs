@@ -12,6 +12,11 @@ use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::principal::Krb5Principal;
 use crate::strconv::{c_string_to_string, string_to_c_string};
 
+pub use libkrb5_sys::{
+    KRB5_AUTH_CONTEXT_DO_SEQUENCE, KRB5_AUTH_CONTEXT_DO_TIME, KRB5_AUTH_CONTEXT_PERMIT_ALL,
+    KRB5_AUTH_CONTEXT_RET_SEQUENCE, KRB5_AUTH_CONTEXT_RET_TIME, KRB5_AUTH_CONTEXT_USE_SUBKEY,
+};
+
 lazy_static! {
     static ref CONTEXT_INIT_LOCK: Mutex<()> = Mutex::new(());
 }
@@ -322,6 +327,55 @@ impl<'a> Krb5AuthContext<'a> {
 
         Ok(())
     }
+
+    pub fn get_local_seq_num(&self) -> Result<i32, Krb5Error> {
+        let mut seq_num: i32 = 0;
+        let code = unsafe { krb5_auth_con_getlocalseqnumber(self.context.context, self.auth_context, &mut seq_num) };
+        krb5_error_code_escape_hatch(&self.context, code)?;
+
+        Ok(seq_num)
+    }
+
+    pub fn get_remote_seq_num(&self) -> Result<i32, Krb5Error> {
+        let mut seq_num: i32 = 0;
+        let code = unsafe { krb5_auth_con_getremoteseqnumber(self.context.context, self.auth_context, &mut seq_num) };
+        krb5_error_code_escape_hatch(&self.context, code)?;
+
+        Ok(seq_num)
+    }
+
+    pub fn set_flags(&self, flags: i32) -> Result<(), Krb5Error> {
+        let code = unsafe { krb5_auth_con_setflags(self.context.context, self.auth_context, flags) };
+        krb5_error_code_escape_hatch(self.context, code)?;
+
+        Ok(())
+    }
+
+    pub fn get_authenticator(&self) -> Result<Krb5Authenticator, Krb5Error> {
+        let mut authenticator_ptr: MaybeUninit<*mut krb5_authenticator> = MaybeUninit::zeroed();
+        let code = unsafe {
+            krb5_auth_con_getauthenticator(self.context.context, self.auth_context, authenticator_ptr.as_mut_ptr())
+        };
+        krb5_error_code_escape_hatch(self.context, code)?;
+
+        let authenticator = Krb5Authenticator {
+            context: self.context,
+            authenticator: unsafe { authenticator_ptr.assume_init() },
+        };
+
+        Ok(authenticator)
+    }
+
+    pub fn get_sendsubkey(&self) -> Result<Krb5Keyblock, Krb5Error> {
+        let mut keyblock_ptr: MaybeUninit<*mut krb5_keyblock> = MaybeUninit::zeroed();
+        let code =
+            unsafe { krb5_auth_con_getsendsubkey(self.context.context, self.auth_context, keyblock_ptr.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(&self.context, code)?;
+
+        let keyblock = unsafe { Krb5Keyblock::from_c(&(*keyblock_ptr.assume_init())) };
+
+        Ok(keyblock)
+    }
 }
 
 impl<'a> Drop for Krb5AuthContext<'a> {
@@ -329,6 +383,21 @@ impl<'a> Drop for Krb5AuthContext<'a> {
         unsafe { krb5_auth_con_free(self.context.context, self.auth_context) };
     }
 }
+
+pub struct Krb5Authenticator<'a> {
+    context: &'a Krb5Context,
+    authenticator: *mut krb5_authenticator,
+}
+
+impl<'a> Drop for Krb5Authenticator<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            krb5_free_authenticator(self.context.context, self.authenticator);
+        }
+    }
+}
+
+impl<'a> Krb5Authenticator<'a> {}
 #[derive(Debug)]
 pub struct Krb5Ticket<'a> {
     context: &'a Krb5Context,

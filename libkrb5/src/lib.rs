@@ -5,7 +5,10 @@ mod cccol;
 pub use cccol::Krb5CCCol;
 
 mod context;
-pub use context::{Krb5AuthContext, Krb5Context};
+pub use context::{
+    KRB5_AUTH_CONTEXT_PERMIT_ALL, KRB5_AUTH_CONTEXT_RET_SEQUENCE, KRB5_AUTH_CONTEXT_RET_TIME,
+    KRB5_AUTH_CONTEXT_USE_SUBKEY,
+};
 
 mod credential;
 pub use credential::{Krb5Creds, Krb5Keyblock, Krb5Keytab};
