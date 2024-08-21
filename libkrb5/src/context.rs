@@ -3,6 +3,7 @@ use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 use std::sync::Mutex;
+use bitflags::bitflags;
 
 use lazy_static::lazy_static;
 use libkrb5_sys::*;
@@ -19,6 +20,26 @@ pub use libkrb5_sys::{
 
 lazy_static! {
     static ref CONTEXT_INIT_LOCK: Mutex<()> = Mutex::new(());
+}
+
+const TOK_MIC_MSG: u16 = 0x0404;
+
+#[derive(Clone, Copy)]
+#[repr(i32)]
+pub enum Krb5KeyUsage {
+    AcceptorSeal = 22,
+    AcceptorSign = 23,
+    InitiatorSeal = 24,
+    InitiatorSign = 25,
+}
+
+
+bitflags! {
+    pub struct Krb5TokenFlag: u8 {
+        const SentByAcceptor = 1;
+        const Sealed = 2;
+        const AcceptorSubkey = 4;
+    }
 }
 
 #[derive(Debug)]
@@ -248,6 +269,86 @@ impl Krb5Context {
         let ap_rep = unsafe { slice::from_raw_parts(ap_rep_ptr.data as *mut u8, ap_rep_ptr.length as usize) };
 
         Ok(ap_rep)
+    }
+
+    pub fn create_signature(
+        &self,
+        message_to_sign: &[u8],
+        key: &Krb5Keyblock,
+        usage: Krb5KeyUsage,
+        local_seq_num: i32,
+    ) -> Result<Vec<u8>, Krb5Error> {
+        let header = Krb5Context::create_mic_token_header(usage, local_seq_num);
+        let mut input_buf = [message_to_sign, header.as_slice()].concat();
+
+        let checksum = self.create_checksum(input_buf.as_mut_slice(), key, usage).unwrap();
+
+        let mic_token = [header.as_slice(), checksum].concat();
+        Ok(mic_token)
+    }
+
+    pub fn verify_signature(&self, message: &[u8], mic: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, seq_num: i32) -> Result<(), Krb5Error> {
+        let received_header = mic[0..16].to_vec();
+        let received_checksum = &mic[16..];
+
+        let expected_header = Krb5Context::create_mic_token_header(usage, seq_num);
+
+        if received_header != expected_header {
+            return Err(Krb5Error::InvalidToken)
+        }
+
+        let mut input_buf = [message, &received_header].concat();
+        let expected_checksum = self.create_checksum(&mut input_buf, key, usage).unwrap();
+
+        if received_checksum != expected_checksum {
+            return Err(Krb5Error::InvalidToken);
+        }
+
+        Ok(())
+    }
+
+    pub fn create_checksum(&self, input_buf: &mut [u8], key: &Krb5Keyblock, usage: Krb5KeyUsage) -> Result<&[u8], Krb5Error> {
+        let input_data = krb5_data {
+            magic: 0,
+            data: input_buf.as_mut_ptr() as *mut i8,
+            length: input_buf.len() as u32,
+        };
+
+        let mut key = key.to_owned();
+        let mut checksum_ptr: MaybeUninit<krb5_checksum> = MaybeUninit::zeroed();
+        let code = unsafe {
+            krb5_c_make_checksum(
+                self.context,
+                0,
+                key.to_c(),
+                usage as i32,
+                &input_data,
+                checksum_ptr.as_mut_ptr(),
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let checksum_ptr = unsafe { checksum_ptr.assume_init() };
+        let checksum = unsafe { slice::from_raw_parts(checksum_ptr.contents, checksum_ptr.length as usize) };
+        Ok(checksum)
+    }
+
+    pub fn create_mic_token_header(usage: Krb5KeyUsage, seq_num: i32) -> Vec<u8> {
+        let tok_id = TOK_MIC_MSG.to_be_bytes();
+        let flags = Krb5Context::get_token_flags(usage).to_be_bytes();
+        let filler = b"\xFF\xFF\xFF\xFF\xFF";
+        let seq_num = (seq_num as i64).to_be_bytes();
+
+        [&tok_id, flags.as_slice(), filler, &seq_num].concat()
+    }
+
+    fn get_token_flags(usage: Krb5KeyUsage) -> Krb5TokenFlag {
+        match usage {
+            Krb5KeyUsage::AcceptorSign => Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey,
+            Krb5KeyUsage::InitiatorSign => Krb5TokenFlag::AcceptorSubkey,
+            Krb5KeyUsage::AcceptorSeal => Krb5TokenFlag::Sealed | Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey,
+            Krb5KeyUsage::InitiatorSeal => Krb5TokenFlag::Sealed | Krb5TokenFlag::AcceptorSubkey,
+        }
     }
 
     // TODO: this produces invalid UTF-8?

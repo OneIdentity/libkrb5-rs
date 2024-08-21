@@ -9,6 +9,7 @@ use crate::context::Krb5Context;
 #[derive(Debug)]
 pub enum Krb5Error {
     LibraryError { message: String },
+    InvalidToken,
     NullPointerDereference,
     StringConversion { error: Option<IntoStringError> },
     MaxVarArgsExceeded,
@@ -20,6 +21,7 @@ impl Display for Krb5Error {
 
         match self {
             LibraryError { message } => write!(f, "Library error: {}", message),
+            InvalidToken => write!(f, "Token validation error"),
             NullPointerDereference => write!(f, "NULL Pointer dereference error"),
             StringConversion { error } => match error {
                 Some(error) => write!(f, "String conversion / UTF8 error: {}", error),
