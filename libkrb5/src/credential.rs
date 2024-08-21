@@ -5,10 +5,7 @@ use std::ptr::{null, null_mut};
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::strconv::{c_string_to_string, string_to_c_string};
 use crate::{Krb5Context, Krb5Principal};
-use libkrb5_sys::{
-    krb5_context, krb5_creds, krb5_enctype, krb5_error_code, krb5_free_cred_contents, krb5_get_init_creds_keytab,
-    krb5_keyblock, krb5_keytab, krb5_keytab_entry, krb5_kt_add_entry, krb5_kt_close, krb5_kt_resolve, krb5_magic,
-};
+use libkrb5_sys::*;
 
 pub struct Krb5Keytab<'a> {
     pub(crate) context: &'a Krb5Context,
@@ -59,6 +56,36 @@ impl<'a> Krb5Creds<'a> {
                 creds_ptr.as_mut_ptr(),
                 principal.principal,
                 keytab.keytab,
+                0,
+                null_mut(),
+                null_mut(),
+            )
+        };
+
+        krb5_error_code_escape_hatch(context, code)?;
+
+        let creds = Krb5Creds {
+            context: &context,
+            creds: unsafe { creds_ptr.assume_init() },
+        };
+
+        Ok(creds)
+    }
+
+    pub fn get_init_creds_password(
+        context: &'a Krb5Context,
+        password: &str,
+        principal: &Krb5Principal,
+    ) -> Result<Krb5Creds<'a>, Krb5Error> {
+        let mut creds_ptr: MaybeUninit<krb5_creds> = MaybeUninit::zeroed();
+        let code = unsafe {
+            krb5_get_init_creds_password(
+                context.context,
+                creds_ptr.as_mut_ptr(),
+                principal.principal,
+                password.as_ptr() as *const i8,
+                None,
+                null_mut(),
                 0,
                 null_mut(),
                 null_mut(),
