@@ -1,7 +1,11 @@
 use core::slice;
+use nom::error::ErrorKind;
+use nom::number::complete::{be_u8, be_u16, be_u64};
+use nom::{bytes::streaming::take, sequence::tuple, IResult};
 use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
+use std::ptr::null;
 use std::sync::Mutex;
 use bitflags::bitflags;
 
@@ -23,6 +27,7 @@ lazy_static! {
 }
 
 const TOK_MIC_MSG: u16 = 0x0404;
+const TOK_WRAP_MSG: u16 = 0x0504;
 
 #[derive(Clone, Copy)]
 #[repr(i32)]
@@ -342,13 +347,171 @@ impl Krb5Context {
         [&tok_id, flags.as_slice(), filler, &seq_num].concat()
     }
 
-    fn get_token_flags(usage: Krb5KeyUsage) -> Krb5TokenFlag {
-        match usage {
+    pub fn create_wrap_token_header(usage: Krb5KeyUsage, seq_num: i32, rrc: Option<u16>) -> Vec<u8> {
+        let tok_id = TOK_WRAP_MSG.to_be_bytes();
+        let flags = Krb5Context::get_token_flags(usage).to_be_bytes();
+        let filler = b"\xFF";
+        let ec: u16 = 0;
+        let rrc: u16 = rrc.unwrap_or(0); /* rrc should be zero in the encrypted header */
+        let seq_num = seq_num as i64;
+        [
+            &tok_id,
+            flags.as_slice(),
+            filler,
+            &ec.to_be_bytes(),
+            &rrc.to_be_bytes(),
+            &seq_num.to_be_bytes(),
+        ]
+        .concat()
+    }
+
+    fn get_token_flags(usage: Krb5KeyUsage) -> u8 {
+        let flags = match usage {
             Krb5KeyUsage::AcceptorSign => Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey,
             Krb5KeyUsage::InitiatorSign => Krb5TokenFlag::AcceptorSubkey,
             Krb5KeyUsage::AcceptorSeal => Krb5TokenFlag::Sealed | Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey,
             Krb5KeyUsage::InitiatorSeal => Krb5TokenFlag::Sealed | Krb5TokenFlag::AcceptorSubkey,
+        };
+        flags.bits()
+    }
+
+    pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, remote_seq_num: i32) -> Result<Vec<u8>, Krb5Error> {
+        let (mut cipher_text, mut header) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num).unwrap();
+
+        let cipher_data = krb5_enc_data {
+            magic: 0,
+            kvno: 0,
+            enctype: key.enctype,
+            ciphertext: krb5_data {
+                magic: 0,
+                data: cipher_text.as_mut_ptr() as *mut i8,
+                length: cipher_text.len() as u32,
+            },
+        };
+
+        let mut plain_text = Vec::<u8>::with_capacity(cipher_text.len());
+        let mut plain_data = krb5_data {
+            magic: 0,
+            data: plain_text.as_mut_ptr() as *mut i8,
+            length: plain_text.capacity() as u32,
+        };
+
+        let mut key = key.to_owned();
+        let key_c = key.to_c();
+        let code = unsafe { krb5_c_decrypt(self.context, key_c, usage as i32, null(), &cipher_data, &mut plain_data) };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let plain_with_header =
+            unsafe { slice::from_raw_parts_mut(plain_data.data as *mut u8, plain_data.length as usize) };
+
+        let header_pos = plain_with_header.len() - 16;
+        let plain = plain_with_header[0..header_pos].to_vec();
+        let decrypted_header = &mut plain_with_header[header_pos..];
+
+        /* Set the rrc field to 0 in the clear text header. After this, it should be the same as the decrypted header */
+        header[6..8].copy_from_slice(&0_u16.to_be_bytes());
+        if decrypted_header != header {
+            return Err(Krb5Error::InvalidToken)
         }
+
+        Ok(plain)
+    }
+
+    fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage, seq_num: i32) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
+        let (mut header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
+        let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num).unwrap();
+        let cipher_text = Krb5Context::rotate_left(cipher_text, rrc);
+
+        Ok((cipher_text, header))
+    }
+
+    fn parse_and_verify_wrap_token_header(header: &[u8], usage: Krb5KeyUsage, expected_seq_num: i32) -> Result<u16, Krb5Error> {
+        let mut parse_wrap_token_header = tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
+        let (_, (token_id, flags, filler, ec, rrc, seq_num)) = parse_wrap_token_header(header).unwrap();
+
+        let expected_flags = Krb5Context::get_token_flags(usage);
+        if token_id != TOK_WRAP_MSG || flags != expected_flags || filler != b"\xFF" || seq_num != expected_seq_num as u64 {
+            return Err(Krb5Error::InvalidToken)
+        }
+        Ok(rrc)
+    }
+
+    fn rotate_left(cipher_text: &[u8], count: u16) -> Vec<u8> {
+        let count = count as usize;
+        [&cipher_text[count..], &cipher_text[0..count]].concat()
+    }
+
+    pub fn encrypt(
+        &self,
+        plain_data: &[u8],
+        key: &Krb5Keyblock,
+        usage: Krb5KeyUsage,
+        seq_num: i32,
+    ) -> Result<Vec<u8>, Krb5Error> {
+        let encrypt_header = Krb5Context::create_wrap_token_header(usage, seq_num, None);
+        let mut plain_data = [plain_data, encrypt_header.as_slice()].concat();
+
+        let mut trailer_length: u32 = 0;
+        let code = unsafe {
+            krb5_c_crypto_length(
+                self.context,
+                key.enctype,
+                KRB5_CRYPTO_TYPE_TRAILER as i32,
+                &mut trailer_length,
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let mut encrypted_length: usize = 0;
+        let code = unsafe { krb5_c_encrypt_length(self.context, key.enctype, plain_data.len(), &mut encrypted_length) };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let input_buffer = krb5_data {
+            magic: 0,
+            data: plain_data.as_mut_ptr() as *mut i8,
+            length: plain_data.len() as u32,
+        };
+
+        let mut encrypted_data_buffer = Vec::with_capacity(encrypted_length);
+        let mut cipher_data = krb5_enc_data {
+            magic: 0,
+            kvno: 0,
+            enctype: key.enctype,
+            ciphertext: krb5_data {
+                magic: 0,
+                data: encrypted_data_buffer.as_mut_ptr() as *mut i8,
+                length: encrypted_length as u32,
+            },
+        };
+
+        let mut keyblock = key.to_owned();
+        let code = unsafe {
+            krb5_c_encrypt(
+                self.context,
+                keyblock.to_c(),
+                usage as i32,
+                null(),
+                &input_buffer,
+                &mut cipher_data,
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let encrypted_data = unsafe {
+            slice::from_raw_parts(
+                cipher_data.ciphertext.data as *const u8,
+                cipher_data.ciphertext.length as usize,
+            )
+        };
+
+        let rrc = 16 + trailer_length as u16;
+        let rotation_start = encrypted_data.len() - rrc as usize;
+        let rotated_data = [&encrypted_data[rotation_start..], &encrypted_data[0..rotation_start]].concat();
+
+        let mut encrypted_token = Krb5Context::create_wrap_token_header(usage, seq_num, Some(rrc));
+        encrypted_token.extend_from_slice(rotated_data.as_slice());
+
+        Ok(encrypted_token)
     }
 
     // TODO: this produces invalid UTF-8?
