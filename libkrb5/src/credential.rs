@@ -1,4 +1,5 @@
 use core::slice;
+use std::backtrace;
 use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};
 
@@ -114,6 +115,32 @@ impl<'a> Krb5Creds<'a> {
 
     pub fn keyblock(&self) -> Krb5Keyblock {
         Krb5Keyblock::from_c(&self.creds.keyblock)
+    }
+
+    pub fn get_client_principal(&self) -> Result<Krb5Principal, Krb5Error> {
+        let mut out_princ: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
+        let code = unsafe { krb5_copy_principal(self.context.context, self.creds.client, out_princ.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(self.context, code)?;
+
+        let client_princ = Krb5Principal {
+            context: &self.context,
+            principal: unsafe { out_princ.assume_init() },
+        };
+
+        Ok(client_princ)
+    }
+
+    pub fn clone(&self) -> Result<Self, Krb5Error> {
+        let mut out_creds: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();
+        let code = unsafe { krb5_copy_creds(self.context.context, &self.creds, out_creds.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(self.context, code)?;
+
+        let out_creds = Krb5Creds {
+            context: &self.context,
+            creds: unsafe { *out_creds.assume_init() },
+        };
+
+        Ok(out_creds)
     }
 }
 

@@ -15,6 +15,7 @@ use bitflags::bitflags;
 use lazy_static::lazy_static;
 use libkrb5_sys::*;
 
+use crate::ccache::Krb5CCache;
 use crate::credential::{Krb5Creds, Krb5Keyblock};
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::principal::Krb5Principal;
@@ -244,6 +245,39 @@ impl Krb5Context {
         unsafe { krb5_free_host_realm(self.context, c_realms) };
 
         Ok(realms)
+    }
+
+    pub fn req_tgs(&self, in_creds: &mut Krb5Creds, principal: &Krb5Principal) -> Result<Krb5Creds, Krb5Error> {
+        let tgs_options: krb5_flags = KRB5_GC_FORWARDABLE as i32;
+        let mut creds_ptr: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();
+
+        let mut ccache: Krb5CCache = Krb5CCache::default(&self)?;
+        {
+            let principal: Krb5Principal = in_creds.get_client_principal()?;
+            ccache.initialize(&principal)?;
+        }
+        ccache.store(in_creds)?;
+
+        in_creds.creds.server = principal.principal;
+        principal.data().set_type(KRB5_NT_SRV_INST as i32);
+
+        let code: krb5_error_code = unsafe {
+            krb5_get_credentials(
+                self.context,
+                tgs_options,
+                ccache.ccache,
+                &mut in_creds.creds,
+                creds_ptr.as_mut_ptr(),
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let creds = Krb5Creds {
+            context: &self,
+            creds: unsafe { *creds_ptr.assume_init() },
+        };
+
+        Ok(creds)
     }
 
     pub fn create_ap_req<'a>(

@@ -41,4 +41,8 @@ impl<'a> Krb5PrincipalData<'a> {
 
         c_string_to_string(realm)
     }
+
+    pub fn set_type(&mut self, type_: krb5_int32) {
+        self.principal_data.type_ = type_
+    }
 }
