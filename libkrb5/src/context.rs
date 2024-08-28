@@ -1,4 +1,7 @@
 use core::slice;
+use std::io::Read;
+use std::iter;
+use nom::AsBytes;
 use nom::error::ErrorKind;
 use nom::number::complete::{be_u8, be_u16, be_u64};
 use nom::{bytes::streaming::take, sequence::tuple, IResult};
@@ -12,7 +15,7 @@ use bitflags::bitflags;
 use lazy_static::lazy_static;
 use libkrb5_sys::*;
 
-use crate::credential::Krb5Keyblock;
+use crate::credential::{Krb5Creds, Krb5Keyblock};
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::principal::Krb5Principal;
 use crate::strconv::{c_string_to_string, string_to_c_string};
@@ -28,6 +31,7 @@ lazy_static! {
 
 const TOK_MIC_MSG: u16 = 0x0404;
 const TOK_WRAP_MSG: u16 = 0x0504;
+const GSS_CHECKSUM_TYPE: i32 = 0x8003;
 
 #[derive(Clone, Copy)]
 #[repr(i32)]
@@ -45,6 +49,17 @@ bitflags! {
         const Sealed = 2;
         const AcceptorSubkey = 4;
     }
+}
+
+#[derive(Clone, Copy)]
+#[repr(i32)]
+pub enum Krb5AuthContextOptions {
+    Deleg = 1,
+    Mutual = 2,
+    Replay = 4,
+    Sequence = 8,
+    Conf = 16,
+    Integ = 32,
 }
 
 #[derive(Debug)]
@@ -229,6 +244,45 @@ impl Krb5Context {
         unsafe { krb5_free_host_realm(self.context, c_realms) };
 
         Ok(realms)
+    }
+
+    pub fn create_ap_req<'a>(
+        &self,
+        auth_context: &'a mut Krb5AuthContext,
+        user_creds: &'a mut Krb5Creds,
+    ) -> Result<&[u8], Krb5Error> {
+        let mut ap_req_ptr: MaybeUninit<krb5_data> = MaybeUninit::zeroed();
+        let mut auth_ctx = auth_context.auth_context;
+        let mut ap_req_options: krb5_flags = 0;
+
+        let code = unsafe {krb5_auth_con_set_req_cksumtype(self.context, auth_context.auth_context, GSS_CHECKSUM_TYPE)};
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let checksum_flags = Krb5AuthContextOptions::Integ as i32 | Krb5AuthContextOptions::Conf as i32 | Krb5AuthContextOptions::Replay as i32 | Krb5AuthContextOptions::Sequence as i32 | Krb5AuthContextOptions::Mutual as i32;
+        let test: Vec<u8> = iter::repeat(0).take(16).collect();
+        let mut checksum_data: Vec<u8> = [&16_u32.to_le_bytes(), test.as_slice(), &checksum_flags.to_le_bytes()].concat();
+        let mut in_data = krb5_data {
+            magic: 0,
+            data: checksum_data.as_mut_ptr() as *mut i8,
+            length: checksum_data.len() as u32
+        };
+
+        let code = unsafe {
+            krb5_mk_req_extended(
+                self.context,
+                &mut auth_ctx,
+                ap_req_options,
+                &mut in_data,
+                &mut user_creds.creds,
+                ap_req_ptr.as_mut_ptr(),
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let ap_req_ptr = unsafe { ap_req_ptr.assume_init() };
+        let ap_req = unsafe { slice::from_raw_parts(ap_req_ptr.data as *mut u8, ap_req_ptr.length as usize) };
+
+        Ok(ap_req)
     }
 
     pub fn verify_ap_req<'a>(
