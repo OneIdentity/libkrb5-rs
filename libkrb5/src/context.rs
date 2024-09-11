@@ -319,6 +319,20 @@ impl Krb5Context {
         Ok(ap_req)
     }
 
+    pub fn verify_ap_rep<'a>(&self, auth_context: &'a mut Krb5AuthContext, ap_rep: &'a [u8]) -> Result<(), Krb5Error>{
+        let mut ap_rep_ptr: MaybeUninit<*mut krb5_ap_rep_enc_part> = MaybeUninit::zeroed();
+        let data = krb5_data {
+            magic: 0,
+            data: ap_rep.as_ptr() as *mut i8,
+            length: ap_rep.len() as u32,
+        };
+        let code = unsafe {krb5_rd_rep(self.context, auth_context.auth_context, &data, ap_rep_ptr.as_mut_ptr())};
+        krb5_error_code_escape_hatch(self, code)?;
+        let ap_rep_ptr = unsafe { ap_rep_ptr.assume_init() };
+        unsafe {krb5_free_ap_rep_enc_part(self.context, ap_rep_ptr)};
+        Ok(())
+    }
+
     pub fn verify_ap_req<'a>(
         &self,
         auth_context: &'a mut Krb5AuthContext,
