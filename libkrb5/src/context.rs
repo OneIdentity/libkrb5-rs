@@ -247,9 +247,17 @@ impl Krb5Context {
         Ok(realms)
     }
 
-    pub fn req_tgs(&self, in_creds: &mut Krb5Creds, principal: &Krb5Principal) -> Result<Krb5Creds, Krb5Error> {
-        let tgs_options: krb5_flags = KRB5_GC_FORWARDABLE as i32;
+    pub fn req_tgs(&self, in_creds: &mut Krb5Creds, principal: &Krb5Principal, second_ticket: &Vec<u8>) -> Result<Krb5Creds, Krb5Error> {
+        let tgs_options: krb5_flags = (KRB5_GC_FORWARDABLE | KRB5_GC_USER_USER) as i32;
         let mut creds_ptr: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();
+
+        let tmp = second_ticket.as_slice();
+        let data = krb5_data {
+            magic: 0,
+            data: tmp.as_ptr() as *mut i8,
+            length: tmp.len() as u32,
+        };
+        in_creds.creds.second_ticket = data;
 
         let mut ccache: Krb5CCache = Krb5CCache::default(&self)?;
         {
@@ -287,7 +295,7 @@ impl Krb5Context {
     ) -> Result<&[u8], Krb5Error> {
         let mut ap_req_ptr: MaybeUninit<krb5_data> = MaybeUninit::zeroed();
         let mut auth_ctx = auth_context.auth_context;
-        let mut ap_req_options: krb5_flags = 0;
+        let mut ap_req_options: krb5_flags = (AP_OPTS_MUTUAL_REQUIRED | AP_OPTS_USE_SESSION_KEY) as i32;
 
         let code = unsafe {krb5_auth_con_set_req_cksumtype(self.context, auth_context.auth_context, GSS_CHECKSUM_TYPE)};
         krb5_error_code_escape_hatch(self, code)?;
