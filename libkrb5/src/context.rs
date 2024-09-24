@@ -771,7 +771,22 @@ impl<'a> Drop for Krb5Authenticator<'a> {
     }
 }
 
-impl<'a> Krb5Authenticator<'a> {}
+impl<'a> Krb5Authenticator<'a> {
+    pub fn get_client_principal(&self) -> Result<Krb5Principal, Krb5Error> {
+        let principal = unsafe { (*self.authenticator).client };
+        let mut out_princ: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
+        let code = unsafe { krb5_copy_principal(self.context.context, principal, out_princ.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(self.context, code)?;
+
+        let client_princ = Krb5Principal {
+            context: &self.context,
+            principal: unsafe { out_princ.assume_init() },
+        };
+
+        Ok(client_princ)
+    }
+}
+
 #[derive(Debug)]
 pub struct Krb5Ticket<'a> {
     context: &'a Krb5Context,
