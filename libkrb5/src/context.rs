@@ -485,8 +485,8 @@ impl Krb5Context {
         flags.bits()
     }
 
-    pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, remote_seq_num: i32) -> Result<Vec<u8>, Krb5Error> {
-        let (mut cipher_text, mut header) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num).unwrap();
+    pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage) -> Result<Vec<u8>, Krb5Error> {
+        let (mut cipher_text, mut header) = Krb5Context::parse_wrap_token(encoded_data, usage).unwrap();
 
         let cipher_data = krb5_enc_data {
             magic: 0,
@@ -527,20 +527,20 @@ impl Krb5Context {
         Ok(plain)
     }
 
-    fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage, seq_num: i32) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
+    fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
         let (mut header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
-        let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num).unwrap();
+        let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage).unwrap();
         let cipher_text = Krb5Context::rotate_left(cipher_text, rrc);
 
         Ok((cipher_text, header))
     }
 
-    fn parse_and_verify_wrap_token_header(header: &[u8], usage: Krb5KeyUsage, expected_seq_num: i32) -> Result<u16, Krb5Error> {
+    fn parse_and_verify_wrap_token_header(header: &[u8], usage: Krb5KeyUsage) -> Result<u16, Krb5Error> {
         let mut parse_wrap_token_header = tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
         let (_, (token_id, flags, filler, ec, rrc, seq_num)) = parse_wrap_token_header(header).unwrap();
 
         let expected_flags = Krb5Context::get_token_flags(usage);
-        if token_id != TOK_WRAP_MSG || flags != expected_flags || filler != b"\xFF" || seq_num != expected_seq_num as u64 {
+        if token_id != TOK_WRAP_MSG || flags != expected_flags || filler != b"\xFF" {
             return Err(Krb5Error::InvalidToken)
         }
         Ok(rrc)
