@@ -1,11 +1,8 @@
 use core::slice;
-use std::io::Read;
 use std::iter;
-use nom::AsBytes;
 use nom::error::ErrorKind;
 use nom::number::complete::{be_u8, be_u16, be_u64};
-use nom::{bytes::streaming::take, sequence::tuple, IResult};
-use std::mem::ManuallyDrop;
+use nom::{bytes::streaming::take, sequence::tuple};
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 use std::ptr::null;
@@ -295,7 +292,7 @@ impl Krb5Context {
     ) -> Result<&[u8], Krb5Error> {
         let mut ap_req_ptr: MaybeUninit<krb5_data> = MaybeUninit::zeroed();
         let mut auth_ctx = auth_context.auth_context;
-        let mut ap_req_options: krb5_flags = (AP_OPTS_MUTUAL_REQUIRED | AP_OPTS_USE_SESSION_KEY) as i32;
+        let ap_req_options: krb5_flags = (AP_OPTS_MUTUAL_REQUIRED | AP_OPTS_USE_SESSION_KEY) as i32;
 
         let code = unsafe {krb5_auth_con_set_req_cksumtype(self.context, auth_context.auth_context, GSS_CHECKSUM_TYPE)};
         krb5_error_code_escape_hatch(self, code)?;
@@ -528,7 +525,7 @@ impl Krb5Context {
     }
 
     fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage, seq_num: i32) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
-        let (mut header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
+        let (header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
         let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num).unwrap();
         let cipher_text = Krb5Context::rotate_left(cipher_text, rrc);
 
@@ -537,7 +534,7 @@ impl Krb5Context {
 
     fn parse_and_verify_wrap_token_header(header: &[u8], usage: Krb5KeyUsage, expected_seq_num: i32) -> Result<u16, Krb5Error> {
         let mut parse_wrap_token_header = tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
-        let (_, (token_id, flags, filler, ec, rrc, seq_num)) = parse_wrap_token_header(header).unwrap();
+        let (_, (token_id, flags, filler, _ec, rrc, seq_num)) = parse_wrap_token_header(header).unwrap();
 
         let expected_flags = Krb5Context::get_token_flags(usage);
         if token_id != TOK_WRAP_MSG || flags != expected_flags || filler != b"\xFF" || seq_num != expected_seq_num as u64 {

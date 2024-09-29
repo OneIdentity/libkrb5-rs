@@ -1,10 +1,9 @@
 use core::slice;
-use std::backtrace;
 use std::mem::MaybeUninit;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
-use crate::strconv::{c_string_to_string, string_to_c_string};
+use crate::strconv::string_to_c_string;
 use crate::{Krb5Context, Krb5Principal};
 use libkrb5_sys::*;
 
