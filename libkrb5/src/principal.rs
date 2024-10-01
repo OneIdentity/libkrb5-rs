@@ -1,9 +1,10 @@
+use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
 use libkrb5_sys::*;
 
 use crate::context::Krb5Context;
-use crate::error::Krb5Error;
+use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::strconv::c_string_to_string;
 
 #[derive(Debug)]
@@ -44,5 +45,18 @@ impl<'a> Krb5PrincipalData<'a> {
 
     pub fn set_type(&mut self, type_: krb5_int32) {
         self.principal_data.type_ = type_
+    }
+
+    pub fn unparse(&mut self) -> Result<Option<String>, Krb5Error> {
+        let mut name: MaybeUninit<*mut c_char> = MaybeUninit::zeroed();
+        let code: krb5_error_code =
+            unsafe { krb5_unparse_name(self.context.context, &self.principal_data, name.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(&self.context, code)?;
+
+        let name = unsafe { name.assume_init() };
+        let string = c_string_to_string(name)?;
+        unsafe { krb5_free_unparsed_name(self.context.context, name) };
+
+        Ok(Some(string))
     }
 }
