@@ -43,6 +43,18 @@ impl From<IntoStringError> for Krb5Error {
     }
 }
 
+impl From<nom::error::Error<&[u8]>> for Krb5Error {
+    fn from(_error: nom::error::Error<&[u8]>) -> Self {
+        Krb5Error::InvalidToken
+    }
+}
+
+impl From<nom::Err<nom::error::Error<&[u8]>>> for Krb5Error {
+    fn from(_error: nom::Err<nom::error::Error<&[u8]>>) -> Self {
+        Krb5Error::InvalidToken
+    }
+}
+
 impl From<nom::Err<(&[u8], nom::error::ErrorKind)>> for Krb5Error {
     fn from(_error: nom::Err<(&[u8], nom::error::ErrorKind)>) -> Self {
         Krb5Error::InvalidToken
