@@ -393,7 +393,7 @@ impl Krb5Context {
         let header = Krb5Context::create_mic_token_header(usage, local_seq_num);
         let mut input_buf = [message_to_sign, header.as_slice()].concat();
 
-        let checksum = self.create_checksum(input_buf.as_mut_slice(), key, usage).unwrap();
+        let checksum = self.create_checksum(input_buf.as_mut_slice(), key, usage)?;
 
         let mic_token = [header.as_slice(), checksum].concat();
         Ok(mic_token)
@@ -410,7 +410,7 @@ impl Krb5Context {
         }
 
         let mut input_buf = [message, &received_header].concat();
-        let expected_checksum = self.create_checksum(&mut input_buf, key, usage).unwrap();
+        let expected_checksum = self.create_checksum(&mut input_buf, key, usage)?;
 
         if received_checksum != expected_checksum {
             return Err(Krb5Error::InvalidToken);
@@ -483,7 +483,7 @@ impl Krb5Context {
     }
 
     pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, remote_seq_num: i32) -> Result<Vec<u8>, Krb5Error> {
-        let (mut cipher_text, mut header) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num).unwrap();
+        let (mut cipher_text, mut header) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num)?;
 
         let cipher_data = krb5_enc_data {
             magic: 0,
@@ -526,7 +526,7 @@ impl Krb5Context {
 
     fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage, seq_num: i32) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
         let (header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
-        let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num).unwrap();
+        let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num)?;
         let cipher_text = Krb5Context::rotate_left(cipher_text, rrc);
 
         Ok((cipher_text, header))
@@ -534,7 +534,7 @@ impl Krb5Context {
 
     fn parse_and_verify_wrap_token_header(header: &[u8], usage: Krb5KeyUsage, expected_seq_num: i32) -> Result<u16, Krb5Error> {
         let mut parse_wrap_token_header = tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
-        let (_, (token_id, flags, filler, _ec, rrc, seq_num)) = parse_wrap_token_header(header).unwrap();
+        let (_, (token_id, flags, filler, _ec, rrc, seq_num)) = parse_wrap_token_header(header)?;
 
         let expected_flags = Krb5Context::get_token_flags(usage);
         if token_id != TOK_WRAP_MSG || flags != expected_flags || filler != b"\xFF" || seq_num != expected_seq_num as u64 {
