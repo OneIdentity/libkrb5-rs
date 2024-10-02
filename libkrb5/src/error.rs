@@ -43,6 +43,18 @@ impl From<IntoStringError> for Krb5Error {
     }
 }
 
+impl From<nom::error::Error<&[u8]>> for Krb5Error {
+    fn from(error: nom::error::Error<&[u8]>) -> Self {
+        Krb5Error::InvalidToken
+    }
+}
+
+impl From<nom::Err<nom::error::Error<&[u8]>>> for Krb5Error {
+    fn from(error: nom::Err<nom::error::Error<&[u8]>>) -> Self {
+        Krb5Error::InvalidToken
+    }
+}
+
 #[must_use]
 pub(crate) fn krb5_error_code_escape_hatch(context: &Krb5Context, code: krb5_error_code) -> Result<(), Krb5Error> {
     if code == 0 {
