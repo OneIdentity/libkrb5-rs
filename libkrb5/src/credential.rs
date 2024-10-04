@@ -1,10 +1,9 @@
 use core::slice;
-use std::backtrace;
 use std::mem::MaybeUninit;
-use std::ptr::{null, null_mut};
+use std::ptr::{null_mut};
 
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
-use crate::strconv::{c_string_to_string, string_to_c_string};
+use crate::strconv::{string_to_c_string};
 use crate::{Krb5Context, Krb5Principal};
 use libkrb5_sys::*;
 
@@ -113,8 +112,8 @@ impl<'a> Krb5Creds<'a> {
         Some(ticket)
     }
 
-    pub fn keyblock(&self) -> Krb5Keyblock {
-        Krb5Keyblock::from_c(&self.creds.keyblock)
+    pub fn keyblock(&mut self) -> Result<Krb5Keyblock, Krb5Error> {
+        Krb5Keyblock::new_from_raw(&self.context, &mut self.creds.keyblock)
     }
 
     pub fn get_client_principal(&self) -> Result<Krb5Principal, Krb5Error> {
@@ -152,28 +151,44 @@ impl<'a> Drop for Krb5Creds<'a> {
     }
 }
 
-#[derive(Clone)]
-pub struct Krb5Keyblock {
-    magic: krb5_magic,
-    pub(crate) enctype: krb5_enctype,
-    pub(crate) contents: Vec<u8>,
+pub struct Krb5Keyblock<'a> {
+    pub(crate) context: &'a Krb5Context,
+    pub(crate) keyblock: &'a mut krb5_keyblock,
 }
 
-impl Krb5Keyblock {
-    pub fn from_c(raw_keyblock: &krb5_keyblock) -> Krb5Keyblock {
-        Krb5Keyblock {
-            magic: raw_keyblock.magic,
-            enctype: raw_keyblock.enctype,
-            contents: unsafe { slice::from_raw_parts(raw_keyblock.contents, raw_keyblock.length as usize).to_vec() },
+impl<'a> Drop for Krb5Keyblock<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            krb5_free_keyblock(self.context.context, self.keyblock);
         }
     }
-    pub fn to_c(&mut self) -> *mut krb5_keyblock {
-        let keyblock = krb5_keyblock {
-            magic: self.magic,
-            enctype: self.enctype,
-            length: self.contents.len() as u32,
-            contents: self.contents.as_mut_ptr(),
+}
+
+impl<'a> Krb5Keyblock<'a> {
+    pub fn copy(&self) -> Result<Self, Krb5Error> {
+        let mut keyblock_ptr: MaybeUninit<*mut krb5_keyblock> = MaybeUninit::zeroed();
+        let code = unsafe {krb5_copy_keyblock(self.context.context, self.keyblock, keyblock_ptr.as_mut_ptr())};
+        krb5_error_code_escape_hatch(self.context, code)?;
+
+        let keyblock = Krb5Keyblock {
+            context: self.context,
+            keyblock: unsafe {
+                keyblock_ptr.assume_init().as_mut().unwrap()
+            }
         };
-        Box::into_raw(Box::new(keyblock))
+
+        Ok(keyblock)
+    }
+
+    pub fn new_from_raw(context: &'a Krb5Context, from: *mut krb5_keyblock) -> Result<Krb5Keyblock<'a>, Krb5Error> {
+        let mut keyblock_ptr: MaybeUninit<*mut krb5_keyblock> = MaybeUninit::zeroed();
+        let code = unsafe {krb5_copy_keyblock(context.context, from, keyblock_ptr.as_mut_ptr())};
+        krb5_error_code_escape_hatch(&context, code)?;
+
+        let keyblock = Krb5Keyblock {
+            context: &context,
+            keyblock: unsafe {&mut *keyblock_ptr.assume_init()}
+        };
+        Ok(keyblock)
     }
 }
