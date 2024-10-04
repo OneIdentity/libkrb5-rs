@@ -289,7 +289,7 @@ impl Krb5Context {
         &self,
         auth_context: &'a mut Krb5AuthContext,
         user_creds: &'a mut Krb5Creds,
-    ) -> Result<&[u8], Krb5Error> {
+    ) -> Result<Vec<u8>, Krb5Error> {
         let mut ap_req_ptr: MaybeUninit<krb5_data> = MaybeUninit::zeroed();
         let mut auth_ctx = auth_context.auth_context;
         let ap_req_options: krb5_flags = (AP_OPTS_MUTUAL_REQUIRED | AP_OPTS_USE_SESSION_KEY) as i32;
@@ -318,8 +318,9 @@ impl Krb5Context {
         };
         krb5_error_code_escape_hatch(self, code)?;
 
-        let ap_req_ptr = unsafe { ap_req_ptr.assume_init() };
-        let ap_req = unsafe { slice::from_raw_parts(ap_req_ptr.data as *mut u8, ap_req_ptr.length as usize) };
+        let mut ap_req_ptr = unsafe { ap_req_ptr.assume_init() };
+        let ap_req = unsafe { slice::from_raw_parts(ap_req_ptr.data as *mut u8, ap_req_ptr.length as usize).to_vec() };
+        unsafe { krb5_free_data_contents(self.context, &mut ap_req_ptr)};
 
         Ok(ap_req)
     }
@@ -372,13 +373,14 @@ impl Krb5Context {
         Ok((ap_req_options, ticket))
     }
 
-    pub fn create_ap_rep<'a>(&self, auth_context: &'a Krb5AuthContext) -> Result<&[u8], Krb5Error> {
+    pub fn create_ap_rep<'a>(&self, auth_context: &'a Krb5AuthContext) -> Result<Vec<u8>, Krb5Error> {
         let mut ap_rep_ptr: MaybeUninit<krb5_data> = MaybeUninit::zeroed();
         let code = unsafe { krb5_mk_rep(self.context, auth_context.auth_context, ap_rep_ptr.as_mut_ptr()) };
         krb5_error_code_escape_hatch(self, code)?;
 
-        let ap_rep_ptr = unsafe { ap_rep_ptr.assume_init() };
-        let ap_rep = unsafe { slice::from_raw_parts(ap_rep_ptr.data as *mut u8, ap_rep_ptr.length as usize) };
+        let mut ap_rep_ptr = unsafe { ap_rep_ptr.assume_init() };
+        let ap_rep = unsafe { slice::from_raw_parts(ap_rep_ptr.data as *mut u8, ap_rep_ptr.length as usize).to_vec() };
+        unsafe { krb5_free_data_contents(self.context, &mut ap_rep_ptr)};
 
         Ok(ap_rep)
     }
@@ -395,7 +397,7 @@ impl Krb5Context {
 
         let checksum = self.create_checksum(input_buf.as_mut_slice(), key, usage)?;
 
-        let mic_token = [header.as_slice(), checksum].concat();
+        let mic_token = [header.as_slice(), &checksum].concat();
         Ok(mic_token)
     }
 
@@ -419,7 +421,7 @@ impl Krb5Context {
         Ok(())
     }
 
-    pub fn create_checksum(&self, input_buf: &mut [u8], key: &Krb5Keyblock, usage: Krb5KeyUsage) -> Result<&[u8], Krb5Error> {
+    pub fn create_checksum(&self, input_buf: &mut [u8], key: &Krb5Keyblock, usage: Krb5KeyUsage) -> Result<Vec<u8>, Krb5Error> {
         let input_data = krb5_data {
             magic: 0,
             data: input_buf.as_mut_ptr() as *mut i8,
@@ -440,8 +442,9 @@ impl Krb5Context {
         };
         krb5_error_code_escape_hatch(self, code)?;
 
-        let checksum_ptr = unsafe { checksum_ptr.assume_init() };
-        let checksum = unsafe { slice::from_raw_parts(checksum_ptr.contents, checksum_ptr.length as usize) };
+        let mut checksum_ptr = unsafe { checksum_ptr.assume_init() };
+        let checksum = unsafe { slice::from_raw_parts(checksum_ptr.contents, checksum_ptr.length as usize).to_vec() };
+        unsafe {krb5_free_checksum_contents(self.context, &mut checksum_ptr)};
         Ok(checksum)
     }
 
