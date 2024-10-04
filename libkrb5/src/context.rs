@@ -426,13 +426,13 @@ impl Krb5Context {
             length: input_buf.len() as u32,
         };
 
-        let mut key = key.to_owned();
+        let mut key = key.copy()?;
         let mut checksum_ptr: MaybeUninit<krb5_checksum> = MaybeUninit::zeroed();
         let code = unsafe {
             krb5_c_make_checksum(
                 self.context,
                 0,
-                key.to_c(),
+                key.keyblock,
                 usage as i32,
                 &input_data,
                 checksum_ptr.as_mut_ptr(),
@@ -488,7 +488,7 @@ impl Krb5Context {
         let cipher_data = krb5_enc_data {
             magic: 0,
             kvno: 0,
-            enctype: key.enctype,
+            enctype: key.keyblock.enctype,
             ciphertext: krb5_data {
                 magic: 0,
                 data: cipher_text.as_mut_ptr() as *mut i8,
@@ -503,9 +503,8 @@ impl Krb5Context {
             length: plain_text.capacity() as u32,
         };
 
-        let mut key = key.to_owned();
-        let key_c = key.to_c();
-        let code = unsafe { krb5_c_decrypt(self.context, key_c, usage as i32, null(), &cipher_data, &mut plain_data) };
+        let mut key = key.copy()?;
+        let code = unsafe { krb5_c_decrypt(self.context, key.keyblock, usage as i32, null(), &cipher_data, &mut plain_data) };
         krb5_error_code_escape_hatch(self, code)?;
 
         let plain_with_header =
@@ -562,7 +561,7 @@ impl Krb5Context {
         let code = unsafe {
             krb5_c_crypto_length(
                 self.context,
-                key.enctype,
+                key.keyblock.enctype,
                 KRB5_CRYPTO_TYPE_TRAILER as i32,
                 &mut trailer_length,
             )
@@ -570,7 +569,7 @@ impl Krb5Context {
         krb5_error_code_escape_hatch(self, code)?;
 
         let mut encrypted_length: usize = 0;
-        let code = unsafe { krb5_c_encrypt_length(self.context, key.enctype, plain_data.len(), &mut encrypted_length) };
+        let code = unsafe { krb5_c_encrypt_length(self.context, key.keyblock.enctype, plain_data.len(), &mut encrypted_length) };
         krb5_error_code_escape_hatch(self, code)?;
 
         let input_buffer = krb5_data {
@@ -583,7 +582,7 @@ impl Krb5Context {
         let mut cipher_data = krb5_enc_data {
             magic: 0,
             kvno: 0,
-            enctype: key.enctype,
+            enctype: key.keyblock.enctype,
             ciphertext: krb5_data {
                 magic: 0,
                 data: encrypted_data_buffer.as_mut_ptr() as *mut i8,
@@ -591,11 +590,11 @@ impl Krb5Context {
             },
         };
 
-        let mut keyblock = key.to_owned();
+        let mut keyblock = key.copy()?;
         let code = unsafe {
             krb5_c_encrypt(
                 self.context,
-                keyblock.to_c(),
+                keyblock.keyblock,
                 usage as i32,
                 null(),
                 &input_buffer,
@@ -691,9 +690,9 @@ impl<'a> Krb5AuthContext<'a> {
     }
 
     pub fn set_userkey(&self, keyblock: &Krb5Keyblock) -> Result<(), Krb5Error> {
-        let mut keyblock = keyblock.to_owned();
+        let mut key = keyblock.copy()?;
         let code: krb5_error_code =
-            unsafe { krb5_auth_con_setuseruserkey(self.context.context, self.auth_context, keyblock.to_c()) };
+            unsafe { krb5_auth_con_setuseruserkey(self.context.context, self.auth_context, key.keyblock) };
         krb5_error_code_escape_hatch(self.context, code)?;
 
         Ok(())
@@ -743,9 +742,12 @@ impl<'a> Krb5AuthContext<'a> {
             unsafe { krb5_auth_con_getsendsubkey(self.context.context, self.auth_context, keyblock_ptr.as_mut_ptr()) };
         krb5_error_code_escape_hatch(&self.context, code)?;
 
-        let keyblock = unsafe { Krb5Keyblock::from_c(&(*keyblock_ptr.assume_init())) };
+        let key = Krb5Keyblock {
+                context: &self.context,
+                keyblock: unsafe {keyblock_ptr.assume_init().as_mut().unwrap()}
+        };
 
-        Ok(keyblock)
+        Ok(key)
     }
 }
 
