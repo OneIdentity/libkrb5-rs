@@ -32,6 +32,7 @@ impl<'a> Krb5Principal<'a> {
 
 #[derive(Debug)]
 pub struct Krb5PrincipalData<'a> {
+    #[allow(dead_code)]
     pub(crate) context: &'a Krb5Context,
     pub(crate) principal_data: krb5_principal_data,
 }

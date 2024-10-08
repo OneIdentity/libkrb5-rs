@@ -3,7 +3,7 @@ members = [
     "libkrb5",
     "libkrb5-sys",
 ]
-workspace.resolver = "2"
+resolver = "2"
 
 [profile.release]
 codegen-units = 1
