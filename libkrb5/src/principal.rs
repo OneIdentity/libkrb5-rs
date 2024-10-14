@@ -60,4 +60,15 @@ impl<'a> Krb5PrincipalData<'a> {
 
         Ok(Some(string))
     }
+
+    pub fn compare(&mut self, principal_data: Krb5PrincipalData) -> bool {
+        let result = unsafe {
+            krb5_principal_compare(
+                self.context.context,
+                &self.principal_data,
+                &principal_data.principal_data,
+            )
+        };
+        result != 0
+    }
 }
