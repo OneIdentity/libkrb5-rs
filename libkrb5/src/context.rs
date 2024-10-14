@@ -3,6 +3,7 @@ use std::iter;
 use nom::error::ErrorKind;
 use nom::number::complete::{be_u8, be_u16, be_u64, le_u32};
 use nom::{bytes::streaming::take, sequence::tuple};
+use std::fmt::{Debug, Formatter};
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 use std::ptr::null;
@@ -27,9 +28,31 @@ lazy_static! {
     static ref CONTEXT_INIT_LOCK: Mutex<()> = Mutex::new(());
 }
 
-const TOK_MIC_MSG: u16 = 0x0404;
-const TOK_WRAP_MSG: u16 = 0x0504;
+const TOK_MIC_MSG: &[u8] = b"\x04\x04";
+const TOK_WRAP_MSG: &[u8] = b"\x05\x04";
 const GSS_CHECKSUM_TYPE: i32 = 0x8003;
+
+struct HexDump<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> HexDump<'a> {
+    fn from(data: &[u8]) -> HexDump {
+        HexDump { data }
+    }
+}
+
+impl<'a> Debug for HexDump<'a> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+        let mut sep = "";
+        for i in self.data.iter() {
+            write!(f, "{}", sep)?;
+            write!(f, "{:#04X}", i)?;
+            sep = " ";
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy)]
 #[repr(i32)]
@@ -411,7 +434,8 @@ impl Krb5Context {
         let expected_checksum = self.create_checksum(&mut input_buf, key, usage)?;
 
         if received_checksum != expected_checksum {
-            return Err(Krb5Error::InvalidToken);
+            return Err(Krb5Error::InvalidToken { message: format!("Kerberos mic token verification failed, invalid signature; expected_signature='{:?}', token_signature='{:?}'",
+                HexDump::from(&expected_checksum), HexDump::from(&received_checksum))});
         }
 
         Ok(())
@@ -444,32 +468,34 @@ impl Krb5Context {
     }
 
     pub fn create_mic_token_header(usage: Krb5KeyUsage, seq_num: i32) -> Vec<u8> {
-        let tok_id = TOK_MIC_MSG.to_be_bytes();
-        let flags = Krb5Context::get_token_flags(usage).to_be_bytes();
+        let tok_id = TOK_MIC_MSG;
+        let flags = Krb5Context::get_token_flags(usage);
         let filler = b"\xFF\xFF\xFF\xFF\xFF";
         let seq_num = (seq_num as i64).to_be_bytes();
 
         [&tok_id, flags.as_slice(), filler, &seq_num].concat()
     }
 
-    fn verify_mic_token_header(header: &[u8], usage: Krb5KeyUsage, expected_seq_num: Option<i32>) -> Result<(), Krb5Error> {
+    fn verify_mic_token_header(token_header: &[u8], usage: Krb5KeyUsage, expected_seq_num: Option<i32>) -> Result<(), Krb5Error> {
         let mut parse_mic_token_header = tuple::<_, _, nom::error::Error<&[u8]>, _>((be_u16, be_u8, take(5u8), be_u64));
-        let (_, (token_id, flags, filler, seq_num)) = parse_mic_token_header(header)?;
+        let (_, (_, _, _, token_seq_num)) = parse_mic_token_header(token_header).or_else(|_| {
+            Err(Krb5Error::InvalidToken {
+                message: String::from("Kerberos mic token verification failed, short header;"),
+            })
+        })?;
 
-        let expected_flags = Krb5Context::get_token_flags(usage);
-        if token_id != TOK_MIC_MSG || flags != expected_flags || filler != b"\xFF\xFF\xFF\xFF\xFF" {
-            return Err(Krb5Error::InvalidToken)
+        let expected_header = Krb5Context::create_mic_token_header(usage, expected_seq_num.unwrap_or(token_seq_num as i32));
+
+        if expected_header != token_header {
+            return Err(Krb5Error::InvalidToken { message: format!("Kerberos mic token verification failed, invalid header; expected_header='{:?}', token_header='{:?}'", HexDump::from(&expected_header), HexDump::from(&token_header)) });
         }
 
-        match expected_seq_num {
-            Some(expected_seq_num) if expected_seq_num != seq_num as i32 => return Err(Krb5Error::InvalidToken),
-            _ => Ok(())
-        }
+        Ok(())
     }
 
     pub fn create_wrap_token_header(usage: Krb5KeyUsage, seq_num: i32, rrc: Option<u16>) -> Vec<u8> {
-        let tok_id = TOK_WRAP_MSG.to_be_bytes();
-        let flags = Krb5Context::get_token_flags(usage).to_be_bytes();
+        let tok_id = TOK_WRAP_MSG;
+        let flags = Krb5Context::get_token_flags(usage);
         let filler = b"\xFF";
         let ec: u16 = 0;
         let rrc: u16 = rrc.unwrap_or(0); /* rrc should be zero in the encrypted header */
@@ -486,18 +512,18 @@ impl Krb5Context {
         .concat()
     }
 
-    fn get_token_flags(usage: Krb5KeyUsage) -> u8 {
+    fn get_token_flags(usage: Krb5KeyUsage) -> [u8; 1] {
         let flags = match usage {
             Krb5KeyUsage::AcceptorSign => Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey,
             Krb5KeyUsage::InitiatorSign => Krb5TokenFlag::AcceptorSubkey,
             Krb5KeyUsage::AcceptorSeal => Krb5TokenFlag::Sealed | Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey,
             Krb5KeyUsage::InitiatorSeal => Krb5TokenFlag::Sealed | Krb5TokenFlag::AcceptorSubkey,
         };
-        flags.bits()
+        flags.bits().to_be_bytes()
     }
 
     pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, remote_seq_num: Option<i32>) -> Result<Vec<u8>, Krb5Error> {
-        let (mut cipher_text, mut header) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num)?;
+        let (mut header, mut cipher_text) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num)?;
 
         let cipher_data = krb5_enc_data {
             magic: 0,
@@ -529,10 +555,10 @@ impl Krb5Context {
         let plain = plain_with_header[0..header_pos].to_vec();
         let decrypted_header = &mut plain_with_header[header_pos..];
 
-        /* Set the rrc field to 0 in the clear text header. After this, it should be the same as the decrypted header */
+        /* Set the rrc field to 0 in the cleartext header. After this, it should be the same as the decrypted header */
         header[6..8].copy_from_slice(&0_u16.to_be_bytes());
         if decrypted_header != header {
-            return Err(Krb5Error::InvalidToken)
+            return Err(Krb5Error::InvalidToken {message: format!("Kerberos token decryption failed, cleartext header modified; cleartext_header='{:?}', decrypted_header='{:?}'", HexDump::from(&header), HexDump::from(&decrypted_header))});
         }
 
         Ok(plain)
@@ -540,25 +566,35 @@ impl Krb5Context {
 
     fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage, seq_num: Option<i32>) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
         let (header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
+
         let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num)?;
         let cipher_text = Krb5Context::rotate_left(cipher_text, rrc);
 
-        Ok((cipher_text, header))
+        Ok((header, cipher_text))
     }
 
-    fn parse_and_verify_wrap_token_header(header: &[u8], usage: Krb5KeyUsage, expected_seq_num: Option<i32>) -> Result<u16, Krb5Error> {
+    fn parse_and_verify_wrap_token_header(token_header: &[u8], usage: Krb5KeyUsage, expected_seq_num: Option<i32>) -> Result<u16, Krb5Error> {
         let mut parse_wrap_token_header = tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
-        let (_, (token_id, flags, filler, _ec, rrc, seq_num)) = parse_wrap_token_header(header)?;
+        let (_, (_, _, _, _, rrc, token_seq_num)) = parse_wrap_token_header(token_header).or_else(|_| {
+            Err(Krb5Error::InvalidToken {
+                message: String::from("Kerberos token decryption failed, short header"),
+            })
+        })?;
 
-        let expected_flags = Krb5Context::get_token_flags(usage);
-        if token_id != TOK_WRAP_MSG || flags != expected_flags || filler != b"\xFF" {
-            return Err(Krb5Error::InvalidToken)
+        let expected_header =
+            Krb5Context::create_wrap_token_header(usage, expected_seq_num.unwrap_or(token_seq_num as i32), Some(rrc));
+
+        if expected_header != token_header {
+            return Err(Krb5Error::InvalidToken {
+                message: format!(
+                    "Kerberos token decryption failed, invalid header; expected_header='{:?}', token_header='{:?}'",
+                    HexDump::from(&expected_header),
+                    HexDump::from(&token_header)
+                ),
+            });
         }
 
-        match expected_seq_num {
-            Some(expected_seq_num) if expected_seq_num != seq_num as i32 => return Err(Krb5Error::InvalidToken),
-            _ => Ok(rrc)
-        }
+        Ok(rrc)
     }
 
     fn rotate_left(cipher_text: &[u8], count: u16) -> Vec<u8> {
@@ -811,8 +847,12 @@ impl<'a> Krb5Authenticator<'a> {
             let checksum_c = *(*self.authenticator).checksum;
             slice::from_raw_parts(checksum_c.contents, checksum_c.length as usize)};
 
-        let mut parse_checksum = tuple::<_,_, (&[u8], nom::error::ErrorKind), _>((take(20u8), le_u32));
-        let (_, (_, flags)) = parse_checksum(checksum)?;
+        let mut parse_checksum = tuple::<_, _, (&[u8], nom::error::ErrorKind), _>((take(20u8), le_u32));
+        let (_, (_, flags)) = parse_checksum(checksum).or_else(|_| {
+            Err(Krb5Error::LibraryError {
+                message: String::from("Can't fetch authenticator flags, checksum field is short"),
+            })
+        })?;
 
         Ok(flags)
     }
