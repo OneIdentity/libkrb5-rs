@@ -495,79 +495,6 @@ impl Krb5Context {
         flags.bits()
     }
 
-    /// Decrypt and validate a GSS Wrap token as per RFC 4121 section 4.2.4
-    pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, remote_seq_num: i32) -> Result<Vec<u8>, Krb5Error> {
-        let (mut cipher_text, mut header) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num).unwrap();
-
-        let cipher_data = krb5_enc_data {
-            magic: 0,
-            kvno: 0,
-            enctype: key.enctype,
-            ciphertext: krb5_data {
-                magic: 0,
-                data: cipher_text.as_mut_ptr() as *mut i8,
-                length: cipher_text.len() as u32,
-            },
-        };
-
-        let mut plain_text = Vec::<u8>::with_capacity(cipher_text.len());
-        let mut plain_data = krb5_data {
-            magic: 0,
-            data: plain_text.as_mut_ptr() as *mut i8,
-            length: plain_text.capacity() as u32,
-        };
-
-        let mut key = key.to_owned();
-        let key_c = key.to_c();
-        let code = unsafe { krb5_c_decrypt(self.context, key_c, usage as i32, null(), &cipher_data, &mut plain_data) };
-        krb5_error_code_escape_hatch(self, code)?;
-
-        let plain_with_header =
-            unsafe { slice::from_raw_parts_mut(plain_data.data as *mut u8, plain_data.length as usize) };
-
-        let header_pos = plain_with_header.len() - 16;
-        let plain = plain_with_header[0..header_pos].to_vec();
-        let decrypted_header = &mut plain_with_header[header_pos..];
-
-        /* As per RFC 4121, section 4.2.4, the rrc field is set to 0 in the encrypted header. After this, it should be the same as the clear text header */
-        header[6..8].copy_from_slice(&0_u16.to_be_bytes());
-        if decrypted_header != header {
-            return Err(Krb5Error::InvalidToken)
-        }
-
-        Ok(plain)
-    }
-
-    /// Parse the GSS Wrap token into clear text header and cipher text parts.
-    fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage, seq_num: i32) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
-        let (mut header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
-        let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num).unwrap();
-        /* The data is shifted to the left by rrc octets. See RFC 4121, section 2.4.5 */
-        let cipher_text = Krb5Context::rotate_left(cipher_text, rrc);
-
-        Ok((cipher_text, header))
-    }
-
-    fn parse_and_verify_wrap_token_header(header: &[u8], usage: Krb5KeyUsage, expected_seq_num: i32) -> Result<u16, Krb5Error> {
-        let mut parse_wrap_token_header = tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
-        let (_, (token_id, flags, filler, ec, rrc, seq_num)) = parse_wrap_token_header(header).unwrap();
-
-        let expected_flags = Krb5Context::get_token_flags(usage);
-        if token_id != TOK_WRAP_MSG || flags != expected_flags || filler != b"\xFF" || seq_num != expected_seq_num as u64 {
-            return Err(Krb5Error::InvalidToken)
-        }
-        Ok(rrc)
-    }
-
-    fn rotate_left(cipher_text: &[u8], count: u16) -> Vec<u8> {
-        let count = count as usize;
-        [&cipher_text[count..], &cipher_text[0..count]].concat()
-    }
-    fn rotate_right(cipher_text: &[u8], count: u16) -> Vec<u8> {
-        let rotation_start = cipher_text.len() - count as usize;
-        [&cipher_text[rotation_start..], &cipher_text[0..rotation_start]].concat()
-    }
-
     /// Encrypt plain_data and produce a GSS Wrap token as per RFC 4121 section 4.2.4
     pub fn encrypt(
         &self,
@@ -640,6 +567,79 @@ impl Krb5Context {
         encrypted_token.extend_from_slice(rotated_data.as_slice());
 
         Ok(encrypted_token)
+    }
+
+    /// Decrypt and validate a GSS Wrap token as per RFC 4121 section 4.2.4
+    pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, remote_seq_num: i32) -> Result<Vec<u8>, Krb5Error> {
+        let (mut cipher_text, mut header) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num).unwrap();
+
+        let cipher_data = krb5_enc_data {
+            magic: 0,
+            kvno: 0,
+            enctype: key.enctype,
+            ciphertext: krb5_data {
+                magic: 0,
+                data: cipher_text.as_mut_ptr() as *mut i8,
+                length: cipher_text.len() as u32,
+            },
+        };
+
+        let mut plain_text = Vec::<u8>::with_capacity(cipher_text.len());
+        let mut plain_data = krb5_data {
+            magic: 0,
+            data: plain_text.as_mut_ptr() as *mut i8,
+            length: plain_text.capacity() as u32,
+        };
+
+        let mut key = key.to_owned();
+        let key_c = key.to_c();
+        let code = unsafe { krb5_c_decrypt(self.context, key_c, usage as i32, null(), &cipher_data, &mut plain_data) };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let plain_with_header =
+            unsafe { slice::from_raw_parts_mut(plain_data.data as *mut u8, plain_data.length as usize) };
+
+        let header_pos = plain_with_header.len() - 16;
+        let plain = plain_with_header[0..header_pos].to_vec();
+        let decrypted_header = &mut plain_with_header[header_pos..];
+
+        /* As per RFC 4121, section 4.2.4, the rrc field is set to 0 in the encrypted header. After this, it should be the same as the clear text header */
+        header[6..8].copy_from_slice(&0_u16.to_be_bytes());
+        if decrypted_header != header {
+            return Err(Krb5Error::InvalidToken)
+        }
+
+        Ok(plain)
+    }
+
+    /// Parse the GSS Wrap token into clear text header and cipher text parts.
+    fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage, seq_num: i32) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
+        let (mut header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
+        let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num).unwrap();
+        /* The data is shifted to the left by rrc octets. See RFC 4121, section 2.4.5 */
+        let cipher_text = Krb5Context::rotate_left(cipher_text, rrc);
+
+        Ok((cipher_text, header))
+    }
+
+    fn parse_and_verify_wrap_token_header(header: &[u8], usage: Krb5KeyUsage, expected_seq_num: i32) -> Result<u16, Krb5Error> {
+        let mut parse_wrap_token_header = tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
+        let (_, (token_id, flags, filler, ec, rrc, seq_num)) = parse_wrap_token_header(header).unwrap();
+
+        let expected_flags = Krb5Context::get_token_flags(usage);
+        if token_id != TOK_WRAP_MSG || flags != expected_flags || filler != b"\xFF" || seq_num != expected_seq_num as u64 {
+            return Err(Krb5Error::InvalidToken)
+        }
+        Ok(rrc)
+    }
+
+    fn rotate_left(cipher_text: &[u8], count: u16) -> Vec<u8> {
+        let count = count as usize;
+        [&cipher_text[count..], &cipher_text[0..count]].concat()
+    }
+    fn rotate_right(cipher_text: &[u8], count: u16) -> Vec<u8> {
+        let rotation_start = cipher_text.len() - count as usize;
+        [&cipher_text[rotation_start..], &cipher_text[0..rotation_start]].concat()
     }
 
     // TODO: this produces invalid UTF-8?
