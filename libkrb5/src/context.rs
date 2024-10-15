@@ -616,6 +616,10 @@ impl Krb5Context {
         let count = count as usize;
         [&cipher_text[count..], &cipher_text[0..count]].concat()
     }
+    fn rotate_right(cipher_text: &[u8], count: u16) -> Vec<u8> {
+        let rotation_start = cipher_text.len() - count as usize;
+        [&cipher_text[rotation_start..], &cipher_text[0..rotation_start]].concat()
+    }
 
     /// Encrypt plain_data and produce a GSS Wrap token as per RFC 4121 section 4.2.4
     pub fn encrypt(
@@ -683,8 +687,7 @@ impl Krb5Context {
 
         /* The encrypted data is shifted to right by rrc octets, see RFC 4121, section 4.2.5 */
         let rrc = 16 + trailer_length as u16;
-        let rotation_start = encrypted_data.len() - rrc as usize;
-        let rotated_data = [&encrypted_data[rotation_start..], &encrypted_data[0..rotation_start]].concat();
+        let rotated_data = Krb5Context::rotate_right(encrypted_data, rrc);
 
         let mut encrypted_token = Krb5Context::create_wrap_token_header(usage, seq_num, Some(rrc));
         encrypted_token.extend_from_slice(rotated_data.as_slice());
