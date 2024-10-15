@@ -326,8 +326,9 @@ impl Krb5Context {
         auth_context.set_flags(KRB5_AUTH_CONTEXT_DO_SEQUENCE as i32 | KRB5_AUTH_CONTEXT_DO_TIME as i32)?;
 
         let checksum_flags = Krb5AuthContextOptions::Integ as i32 | Krb5AuthContextOptions::Conf as i32 | Krb5AuthContextOptions::Replay as i32 | Krb5AuthContextOptions::Sequence as i32 | Krb5AuthContextOptions::Mutual as i32;
-        let test: Vec<u8> = iter::repeat(0).take(16).collect();
-        let mut checksum_data: Vec<u8> = [&16_u32.to_le_bytes(), test.as_slice(), &checksum_flags.to_le_bytes()].concat();
+        let binding_length: u32 = 16;
+        let binding_info: Vec<u8> = iter::repeat(0).take(16).collect();
+        let mut checksum_data: Vec<u8> = [&binding_length.to_le_bytes(), binding_info.as_slice(), &checksum_flags.to_le_bytes()].concat();
         let mut in_data = krb5_data {
             magic: 0,
             data: checksum_data.as_mut_ptr() as *mut i8,
