@@ -745,9 +745,14 @@ impl<'a> Krb5AuthContext<'a> {
             unsafe { krb5_auth_con_getsendsubkey(self.context.context, self.auth_context, keyblock_ptr.as_mut_ptr()) };
         krb5_error_code_escape_hatch(&self.context, code)?;
 
+        let keyblock_ptr = unsafe { keyblock_ptr.assume_init().as_mut() };
+        let keyblock_ptr = keyblock_ptr.ok_or_else (|| {
+            return Krb5Error::LibraryError { message: String::from("get_sendsubkey failed, auth context doesn't contain a subkey;") }
+        })?;
+
         let key = Krb5Keyblock {
                 context: &self.context,
-                keyblock: unsafe {keyblock_ptr.assume_init().as_mut().unwrap()}
+                keyblock: keyblock_ptr
         };
 
         Ok(key)
