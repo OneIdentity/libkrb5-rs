@@ -112,8 +112,8 @@ impl<'a> Krb5Creds<'a> {
         Some(ticket)
     }
 
-    pub fn keyblock(&self) -> Krb5Keyblock {
-        Krb5Keyblock::from_c(&self.creds.keyblock)
+    pub fn keyblock(&mut self) -> Result<Krb5Keyblock, Krb5Error> {
+        Krb5Keyblock::new_from_raw(&self.context, &mut self.creds.keyblock)
     }
 
     pub fn get_client_principal(&self) -> Result<Krb5Principal, Krb5Error> {
@@ -151,28 +151,33 @@ impl<'a> Drop for Krb5Creds<'a> {
     }
 }
 
-#[derive(Clone)]
-pub struct Krb5Keyblock {
-    magic: krb5_magic,
-    pub(crate) enctype: krb5_enctype,
-    pub(crate) contents: Vec<u8>,
+pub struct Krb5Keyblock<'a> {
+    pub(crate) context: &'a Krb5Context,
+    pub(crate) keyblock: &'a mut krb5_keyblock,
 }
 
-impl Krb5Keyblock {
-    pub fn from_c(raw_keyblock: &krb5_keyblock) -> Krb5Keyblock {
-        Krb5Keyblock {
-            magic: raw_keyblock.magic,
-            enctype: raw_keyblock.enctype,
-            contents: unsafe { slice::from_raw_parts(raw_keyblock.contents, raw_keyblock.length as usize).to_vec() },
+impl<'a> Drop for Krb5Keyblock<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            krb5_free_keyblock(self.context.context, self.keyblock);
         }
     }
-    pub fn to_c(&mut self) -> *mut krb5_keyblock {
-        let keyblock = krb5_keyblock {
-            magic: self.magic,
-            enctype: self.enctype,
-            length: self.contents.len() as u32,
-            contents: self.contents.as_mut_ptr(),
+}
+
+impl<'a> Krb5Keyblock<'a> {
+    pub fn copy(&self) -> Result<Self, Krb5Error> {
+        Krb5Keyblock::new_from_raw(&self.context, self.keyblock)
+    }
+
+    pub fn new_from_raw(context: &'a Krb5Context, from: *const krb5_keyblock) -> Result<Krb5Keyblock<'a>, Krb5Error> {
+        let mut keyblock_ptr: MaybeUninit<*mut krb5_keyblock> = MaybeUninit::zeroed();
+        let code = unsafe {krb5_copy_keyblock(context.context, from, keyblock_ptr.as_mut_ptr())};
+        krb5_error_code_escape_hatch(&context, code)?;
+
+        let keyblock = Krb5Keyblock {
+            context: &context,
+            keyblock: unsafe {&mut *keyblock_ptr.assume_init()}
         };
-        Box::into_raw(Box::new(keyblock))
+        Ok(keyblock)
     }
 }
