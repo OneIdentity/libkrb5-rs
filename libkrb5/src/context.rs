@@ -1,4 +1,5 @@
 use core::slice;
+use std::ffi::CStr;
 use std::iter;
 use nom::error::ErrorKind;
 use nom::number::complete::{be_u8, be_u16, be_u64, le_u32};
@@ -673,6 +674,40 @@ impl Krb5Context {
         encrypted_token.extend_from_slice(rotated_data.as_slice());
 
         Ok(encrypted_token)
+    }
+
+    pub fn parse_error_message(&self, message: &[u8]) -> Result<(u32, String), Krb5Error> {
+        let mut message = message.to_vec();
+        let mut error_ptr: MaybeUninit<*mut krb5_error> = MaybeUninit::zeroed();
+
+        let message_buffer = krb5_data {
+            magic: 0,
+            data: message.as_mut_ptr() as *mut i8,
+            length: message.len() as u32,
+        };
+        let code = unsafe { krb5_rd_error(self.context, &message_buffer, error_ptr.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let error_ptr = unsafe { error_ptr.assume_init() };
+        let error = unsafe { *error_ptr };
+        let mut error_text = String::from("");
+
+        if !error.text.data.is_null() {
+            let text = unsafe { CStr::from_ptr(error.text.data) };
+            error_text = match text.to_str() {
+                Err(_) => {
+                    format!(
+                        "Invalid error message received; raw_error_text:'{:?}'",
+                        HexDump::from(text.to_bytes_with_nul())
+                    )
+                },
+                Ok(valid_error_text) => valid_error_text.to_string(),
+            };
+        }
+
+        unsafe { krb5_free_error(self.context, error_ptr) };
+
+        Ok((error.error, error_text))
     }
 
     // TODO: this produces invalid UTF-8?
