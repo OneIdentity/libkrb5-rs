@@ -3,7 +3,7 @@ use std::iter;
 use nom::error::ErrorKind;
 use nom::number::complete::{be_u8, be_u16, be_u64};
 use nom::{bytes::streaming::take, sequence::tuple};
-use std::mem::MaybeUninit;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::os::raw::c_char;
 use std::ptr::null;
 use std::sync::Mutex;
@@ -248,12 +248,18 @@ impl Krb5Context {
         let tgs_options: krb5_flags = (KRB5_GC_FORWARDABLE | KRB5_GC_USER_USER) as i32;
         let mut creds_ptr: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();
 
-        let tmp = second_ticket.as_slice();
+        let second_ticket_buffer = unsafe {
+            let buffer = std::alloc::alloc_zeroed(std::alloc::Layout::for_value(second_ticket.as_slice()));
+            std::ptr::copy_nonoverlapping(second_ticket.as_ptr(), buffer, second_ticket.len());
+            buffer
+        };
+
         let data = krb5_data {
             magic: 0,
-            data: tmp.as_ptr() as *mut i8,
-            length: tmp.len() as u32,
+            data: second_ticket_buffer as *mut i8,
+            length: second_ticket.len() as u32,
         };
+
         in_creds.creds.second_ticket = data;
 
         let mut ccache: Krb5CCache = Krb5CCache::default(&self)?;
@@ -263,7 +269,8 @@ impl Krb5Context {
         }
         ccache.store(in_creds)?;
 
-        in_creds.creds.server = principal.principal;
+        let target_principal = ManuallyDrop::new(Krb5Principal::new_from_raw(self, principal.principal)?);
+        in_creds.creds.server = target_principal.principal;
         principal.data().set_type(KRB5_NT_SRV_INST as i32);
 
         let code: krb5_error_code = unsafe {
