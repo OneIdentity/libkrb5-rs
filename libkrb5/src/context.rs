@@ -463,7 +463,7 @@ impl Krb5Context {
             length: input_buf.len() as u32,
         };
 
-        let mut key = key.copy()?;
+        let key = key.copy()?;
         let mut checksum_ptr: MaybeUninit<krb5_checksum> = MaybeUninit::zeroed();
         let code = unsafe {
             krb5_c_make_checksum(
@@ -587,7 +587,7 @@ impl Krb5Context {
             },
         };
 
-        let mut keyblock = key.copy()?;
+        let keyblock = key.copy()?;
         let code = unsafe {
             krb5_c_encrypt(
                 self.context,
@@ -639,7 +639,7 @@ impl Krb5Context {
             length: plain_text.capacity() as u32,
         };
 
-        let mut key = key.copy()?;
+        let key = key.copy()?;
         let code = unsafe { krb5_c_decrypt(self.context, key.keyblock, usage as i32, null(), &cipher_data, &mut plain_data) };
         krb5_error_code_escape_hatch(self, code)?;
 
@@ -807,7 +807,7 @@ impl<'a> Krb5AuthContext<'a> {
     }
 
     pub fn set_userkey(&self, keyblock: &Krb5Keyblock) -> Result<(), Krb5Error> {
-        let mut key = keyblock.copy()?;
+        let key = keyblock.copy()?;
         let code: krb5_error_code =
             unsafe { krb5_auth_con_setuseruserkey(self.context.context, self.auth_context, key.keyblock) };
         krb5_error_code_escape_hatch(self.context, code)?;
