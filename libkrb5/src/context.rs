@@ -536,6 +536,80 @@ impl Krb5Context {
         flags.bits().to_be_bytes()
     }
 
+    /// Encrypt plain_data and produce a GSS Wrap token as per RFC 4121 section 4.2.4
+    pub fn encrypt(
+        &self,
+        plain_data: &[u8],
+        key: &Krb5Keyblock,
+        usage: Krb5KeyUsage,
+        seq_num: i32,
+    ) -> Result<Vec<u8>, Krb5Error> {
+        let encrypt_header = Krb5Context::create_wrap_token_header(usage, seq_num, None);
+        let mut plain_data = [plain_data, encrypt_header.as_slice()].concat();
+
+        let mut trailer_length: u32 = 0;
+        let code = unsafe {
+            krb5_c_crypto_length(
+                self.context,
+                key.keyblock.enctype,
+                KRB5_CRYPTO_TYPE_TRAILER as i32,
+                &mut trailer_length,
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let mut encrypted_length: usize = 0;
+        let code = unsafe { krb5_c_encrypt_length(self.context, key.keyblock.enctype, plain_data.len(), &mut encrypted_length) };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let input_buffer = krb5_data {
+            magic: 0,
+            data: plain_data.as_mut_ptr() as *mut i8,
+            length: plain_data.len() as u32,
+        };
+
+        let mut encrypted_data_buffer = Vec::with_capacity(encrypted_length);
+        let mut cipher_data = krb5_enc_data {
+            magic: 0,
+            kvno: 0,
+            enctype: key.keyblock.enctype,
+            ciphertext: krb5_data {
+                magic: 0,
+                data: encrypted_data_buffer.as_mut_ptr() as *mut i8,
+                length: encrypted_length as u32,
+            },
+        };
+
+        let mut keyblock = key.copy()?;
+        let code = unsafe {
+            krb5_c_encrypt(
+                self.context,
+                keyblock.keyblock,
+                usage as i32,
+                null(),
+                &input_buffer,
+                &mut cipher_data,
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let encrypted_data = unsafe {
+            slice::from_raw_parts(
+                cipher_data.ciphertext.data as *const u8,
+                cipher_data.ciphertext.length as usize,
+            )
+        };
+
+        /* The encrypted data is shifted to right by rrc octets, see RFC 4121, section 4.2.5 */
+        let rrc = 16 + trailer_length as u16;
+        let rotated_data = Krb5Context::rotate_right(encrypted_data, rrc);
+
+        let mut encrypted_token = Krb5Context::create_wrap_token_header(usage, seq_num, Some(rrc));
+        encrypted_token.extend_from_slice(rotated_data.as_slice());
+
+        Ok(encrypted_token)
+    }
+
     /// Decrypt and validate a GSS Wrap token as per RFC 4121 section 4.2.4
     pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, remote_seq_num: Option<i32>) -> Result<Vec<u8>, Krb5Error> {
         let (mut header, mut cipher_text) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num)?;
@@ -620,80 +694,6 @@ impl Krb5Context {
     fn rotate_right(cipher_text: &[u8], count: u16) -> Vec<u8> {
         let rotation_start = cipher_text.len() - count as usize;
         [&cipher_text[rotation_start..], &cipher_text[0..rotation_start]].concat()
-    }
-
-    /// Encrypt plain_data and produce a GSS Wrap token as per RFC 4121 section 4.2.4
-    pub fn encrypt(
-        &self,
-        plain_data: &[u8],
-        key: &Krb5Keyblock,
-        usage: Krb5KeyUsage,
-        seq_num: i32,
-    ) -> Result<Vec<u8>, Krb5Error> {
-        let encrypt_header = Krb5Context::create_wrap_token_header(usage, seq_num, None);
-        let mut plain_data = [plain_data, encrypt_header.as_slice()].concat();
-
-        let mut trailer_length: u32 = 0;
-        let code = unsafe {
-            krb5_c_crypto_length(
-                self.context,
-                key.keyblock.enctype,
-                KRB5_CRYPTO_TYPE_TRAILER as i32,
-                &mut trailer_length,
-            )
-        };
-        krb5_error_code_escape_hatch(self, code)?;
-
-        let mut encrypted_length: usize = 0;
-        let code = unsafe { krb5_c_encrypt_length(self.context, key.keyblock.enctype, plain_data.len(), &mut encrypted_length) };
-        krb5_error_code_escape_hatch(self, code)?;
-
-        let input_buffer = krb5_data {
-            magic: 0,
-            data: plain_data.as_mut_ptr() as *mut i8,
-            length: plain_data.len() as u32,
-        };
-
-        let mut encrypted_data_buffer = Vec::with_capacity(encrypted_length);
-        let mut cipher_data = krb5_enc_data {
-            magic: 0,
-            kvno: 0,
-            enctype: key.keyblock.enctype,
-            ciphertext: krb5_data {
-                magic: 0,
-                data: encrypted_data_buffer.as_mut_ptr() as *mut i8,
-                length: encrypted_length as u32,
-            },
-        };
-
-        let mut keyblock = key.copy()?;
-        let code = unsafe {
-            krb5_c_encrypt(
-                self.context,
-                keyblock.keyblock,
-                usage as i32,
-                null(),
-                &input_buffer,
-                &mut cipher_data,
-            )
-        };
-        krb5_error_code_escape_hatch(self, code)?;
-
-        let encrypted_data = unsafe {
-            slice::from_raw_parts(
-                cipher_data.ciphertext.data as *const u8,
-                cipher_data.ciphertext.length as usize,
-            )
-        };
-
-        /* The encrypted data is shifted to right by rrc octets, see RFC 4121, section 4.2.5 */
-        let rrc = 16 + trailer_length as u16;
-        let rotated_data = Krb5Context::rotate_right(encrypted_data, rrc);
-
-        let mut encrypted_token = Krb5Context::create_wrap_token_header(usage, seq_num, Some(rrc));
-        encrypted_token.extend_from_slice(rotated_data.as_slice());
-
-        Ok(encrypted_token)
     }
 
     pub fn parse_error_message(&self, message: &[u8]) -> Result<(u32, String), Krb5Error> {
