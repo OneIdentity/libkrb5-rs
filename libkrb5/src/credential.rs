@@ -78,12 +78,13 @@ impl<'a> Krb5Creds<'a> {
         principal: &Krb5Principal,
     ) -> Result<Krb5Creds<'a>, Krb5Error> {
         let mut creds_ptr: MaybeUninit<krb5_creds> = MaybeUninit::zeroed();
+        let password = string_to_c_string(password)?;
         let code = unsafe {
             krb5_get_init_creds_password(
                 context.context,
                 creds_ptr.as_mut_ptr(),
                 principal.principal,
-                password.as_ptr() as *const i8,
+                password.as_ptr(),
                 None,
                 null_mut(),
                 0,
