@@ -286,7 +286,7 @@ impl Krb5Context {
 
         in_creds.creds.second_ticket = data;
 
-        let mut ccache: Krb5CCache = Krb5CCache::default(&self)?;
+        let mut ccache: Krb5CCache = Krb5CCache::new_unique(&self, "MEMORY")?;
         {
             let principal: Krb5Principal = in_creds.get_client_principal()?;
             ccache.initialize(&principal)?;

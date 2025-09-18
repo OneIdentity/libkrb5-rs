@@ -18,7 +18,7 @@ pub struct Krb5CCache<'a> {
 impl<'a> Drop for Krb5CCache<'a> {
     fn drop(&mut self) {
         unsafe {
-            krb5_cc_close(self.context.context, self.ccache);
+            krb5_cc_destroy(self.context.context, self.ccache);
         }
     }
 }
