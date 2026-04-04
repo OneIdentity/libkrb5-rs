@@ -1,15 +1,15 @@
+use bitflags::bitflags;
 use core::slice;
-use std::ffi::CStr;
-use std::iter;
 use nom::error::ErrorKind;
-use nom::number::complete::{be_u8, be_u16, be_u64, le_u32};
+use nom::number::complete::{be_u16, be_u64, be_u8, le_u32};
 use nom::{bytes::streaming::take, sequence::tuple};
+use std::ffi::CStr;
 use std::fmt::{Debug, Formatter};
+use std::iter;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::os::raw::c_char;
 use std::ptr::null;
 use std::sync::Mutex;
-use bitflags::bitflags;
 
 use lazy_static::lazy_static;
 use libkrb5_sys::*;
@@ -21,8 +21,12 @@ use crate::principal::Krb5Principal;
 use crate::strconv::{c_string_to_string, string_to_c_string};
 
 pub use libkrb5_sys::{
-    KRB5_AUTH_CONTEXT_DO_SEQUENCE, KRB5_AUTH_CONTEXT_DO_TIME, KRB5_AUTH_CONTEXT_PERMIT_ALL,
-    KRB5_AUTH_CONTEXT_RET_SEQUENCE, KRB5_AUTH_CONTEXT_RET_TIME, KRB5_AUTH_CONTEXT_USE_SUBKEY,
+    KRB5_AUTH_CONTEXT_DO_SEQUENCE,
+    KRB5_AUTH_CONTEXT_DO_TIME,
+    KRB5_AUTH_CONTEXT_PERMIT_ALL,
+    KRB5_AUTH_CONTEXT_RET_SEQUENCE,
+    KRB5_AUTH_CONTEXT_RET_TIME,
+    KRB5_AUTH_CONTEXT_USE_SUBKEY,
 };
 
 lazy_static! {
@@ -268,7 +272,12 @@ impl Krb5Context {
         Ok(realms)
     }
 
-    pub fn req_tgs(&self, in_creds: &mut Krb5Creds, principal: &Krb5Principal, second_ticket: &Vec<u8>) -> Result<Krb5Creds, Krb5Error> {
+    pub fn req_tgs(
+        &self,
+        in_creds: &mut Krb5Creds,
+        principal: &Krb5Principal,
+        second_ticket: &Vec<u8>,
+    ) -> Result<Krb5Creds, Krb5Error> {
         let tgs_options: krb5_flags = (KRB5_GC_FORWARDABLE | KRB5_GC_USER_USER) as i32;
         let mut creds_ptr: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();
 
@@ -326,20 +335,30 @@ impl Krb5Context {
         let ap_req_options: krb5_flags = (AP_OPTS_MUTUAL_REQUIRED | AP_OPTS_USE_SESSION_KEY) as i32;
 
         /* Assemble the authenticator checksum field, as per RFC 4121, section 4.1.1.
-           We only use the Flags field to request service options from the server. */
-        let code = unsafe {krb5_auth_con_set_req_cksumtype(self.context, auth_context.auth_context, GSS_CHECKSUM_TYPE)};
+        We only use the Flags field to request service options from the server. */
+        let code =
+            unsafe { krb5_auth_con_set_req_cksumtype(self.context, auth_context.auth_context, GSS_CHECKSUM_TYPE) };
         krb5_error_code_escape_hatch(self, code)?;
 
         auth_context.set_flags(KRB5_AUTH_CONTEXT_DO_SEQUENCE as i32 | KRB5_AUTH_CONTEXT_DO_TIME as i32)?;
 
-        let checksum_flags = Krb5AuthContextOptions::Integ as i32 | Krb5AuthContextOptions::Conf as i32 | Krb5AuthContextOptions::Replay as i32 | Krb5AuthContextOptions::Sequence as i32 | Krb5AuthContextOptions::Mutual as i32;
+        let checksum_flags = Krb5AuthContextOptions::Integ as i32
+            | Krb5AuthContextOptions::Conf as i32
+            | Krb5AuthContextOptions::Replay as i32
+            | Krb5AuthContextOptions::Sequence as i32
+            | Krb5AuthContextOptions::Mutual as i32;
         let binding_length: u32 = 16;
         let binding_info: Vec<u8> = iter::repeat(0).take(16).collect();
-        let mut checksum_data: Vec<u8> = [&binding_length.to_le_bytes(), binding_info.as_slice(), &checksum_flags.to_le_bytes()].concat();
+        let mut checksum_data: Vec<u8> = [
+            &binding_length.to_le_bytes(),
+            binding_info.as_slice(),
+            &checksum_flags.to_le_bytes(),
+        ]
+        .concat();
         let mut in_data = krb5_data {
             magic: 0,
             data: checksum_data.as_mut_ptr() as *mut i8,
-            length: checksum_data.len() as u32
+            length: checksum_data.len() as u32,
         };
 
         let code = unsafe {
@@ -356,22 +375,22 @@ impl Krb5Context {
 
         let mut ap_req_ptr = unsafe { ap_req_ptr.assume_init() };
         let ap_req = unsafe { slice::from_raw_parts(ap_req_ptr.data as *mut u8, ap_req_ptr.length as usize).to_vec() };
-        unsafe { krb5_free_data_contents(self.context, &mut ap_req_ptr)};
+        unsafe { krb5_free_data_contents(self.context, &mut ap_req_ptr) };
 
         Ok(ap_req)
     }
 
-    pub fn verify_ap_rep<'a>(&self, auth_context: &'a mut Krb5AuthContext, ap_rep: &'a [u8]) -> Result<(), Krb5Error>{
+    pub fn verify_ap_rep<'a>(&self, auth_context: &'a mut Krb5AuthContext, ap_rep: &'a [u8]) -> Result<(), Krb5Error> {
         let mut ap_rep_ptr: MaybeUninit<*mut krb5_ap_rep_enc_part> = MaybeUninit::zeroed();
         let data = krb5_data {
             magic: 0,
             data: ap_rep.as_ptr() as *mut i8,
             length: ap_rep.len() as u32,
         };
-        let code = unsafe {krb5_rd_rep(self.context, auth_context.auth_context, &data, ap_rep_ptr.as_mut_ptr())};
+        let code = unsafe { krb5_rd_rep(self.context, auth_context.auth_context, &data, ap_rep_ptr.as_mut_ptr()) };
         krb5_error_code_escape_hatch(self, code)?;
         let ap_rep_ptr = unsafe { ap_rep_ptr.assume_init() };
-        unsafe {krb5_free_ap_rep_enc_part(self.context, ap_rep_ptr)};
+        unsafe { krb5_free_ap_rep_enc_part(self.context, ap_rep_ptr) };
         Ok(())
     }
 
@@ -416,7 +435,7 @@ impl Krb5Context {
 
         let mut ap_rep_ptr = unsafe { ap_rep_ptr.assume_init() };
         let ap_rep = unsafe { slice::from_raw_parts(ap_rep_ptr.data as *mut u8, ap_rep_ptr.length as usize).to_vec() };
-        unsafe { krb5_free_data_contents(self.context, &mut ap_rep_ptr)};
+        unsafe { krb5_free_data_contents(self.context, &mut ap_rep_ptr) };
 
         Ok(ap_rep)
     }
@@ -439,7 +458,14 @@ impl Krb5Context {
     }
 
     /// Verify a GSS MIC token as per RFC 4121, section 4.2.4
-    pub fn verify_signature(&self, message: &[u8], mic: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, seq_num: Option<i32>) -> Result<(), Krb5Error> {
+    pub fn verify_signature(
+        &self,
+        message: &[u8],
+        mic: &[u8],
+        key: &Krb5Keyblock,
+        usage: Krb5KeyUsage,
+        seq_num: Option<i32>,
+    ) -> Result<(), Krb5Error> {
         let received_header = &mic[0..16];
         let received_checksum = &mic[16..];
 
@@ -456,7 +482,12 @@ impl Krb5Context {
         Ok(())
     }
 
-    pub fn create_checksum(&self, input_buf: &mut [u8], key: &Krb5Keyblock, usage: Krb5KeyUsage) -> Result<Vec<u8>, Krb5Error> {
+    pub fn create_checksum(
+        &self,
+        input_buf: &mut [u8],
+        key: &Krb5Keyblock,
+        usage: Krb5KeyUsage,
+    ) -> Result<Vec<u8>, Krb5Error> {
         let input_data = krb5_data {
             magic: 0,
             data: input_buf.as_mut_ptr() as *mut i8,
@@ -479,7 +510,7 @@ impl Krb5Context {
 
         let mut checksum_ptr = unsafe { checksum_ptr.assume_init() };
         let checksum = unsafe { slice::from_raw_parts(checksum_ptr.contents, checksum_ptr.length as usize).to_vec() };
-        unsafe {krb5_free_checksum_contents(self.context, &mut checksum_ptr)};
+        unsafe { krb5_free_checksum_contents(self.context, &mut checksum_ptr) };
         Ok(checksum)
     }
 
@@ -493,7 +524,11 @@ impl Krb5Context {
         [&tok_id, flags.as_slice(), filler, &seq_num].concat()
     }
 
-    fn verify_mic_token_header(token_header: &[u8], usage: Krb5KeyUsage, expected_seq_num: Option<i32>) -> Result<(), Krb5Error> {
+    fn verify_mic_token_header(
+        token_header: &[u8],
+        usage: Krb5KeyUsage,
+        expected_seq_num: Option<i32>,
+    ) -> Result<(), Krb5Error> {
         let mut parse_mic_token_header = tuple::<_, _, nom::error::Error<&[u8]>, _>((be_u16, be_u8, take(5u8), be_u64));
         let (_, (_, _, _, token_seq_num)) = parse_mic_token_header(token_header).or_else(|_| {
             Err(Krb5Error::InvalidToken {
@@ -501,7 +536,8 @@ impl Krb5Context {
             })
         })?;
 
-        let expected_header = Krb5Context::create_mic_token_header(usage, expected_seq_num.unwrap_or(token_seq_num as i32));
+        let expected_header =
+            Krb5Context::create_mic_token_header(usage, expected_seq_num.unwrap_or(token_seq_num as i32));
 
         if expected_header != token_header {
             return Err(Krb5Error::InvalidToken { message: format!("Kerberos mic token verification failed, invalid header; expected_header='{:?}', token_header='{:?}'", HexDump::from(&expected_header), HexDump::from(&token_header)) });
@@ -516,7 +552,7 @@ impl Krb5Context {
         let flags = Krb5Context::get_token_flags(usage);
         let filler = b"\xFF";
         let ec: u16 = 0; /* Number of filler octets between the plain data and header. Since Microsoft's kerberos
-                            implementation doesn't use a trailer buffer, this is always set to zero.*/
+                         implementation doesn't use a trailer buffer, this is always set to zero.*/
         let rrc: u16 = rrc.unwrap_or(0); /* rrc should be zero in the encrypted header */
         let seq_num = seq_num as i64;
 
@@ -537,7 +573,9 @@ impl Krb5Context {
         let flags = match usage {
             Krb5KeyUsage::AcceptorSign => Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey,
             Krb5KeyUsage::InitiatorSign => Krb5TokenFlag::AcceptorSubkey,
-            Krb5KeyUsage::AcceptorSeal => Krb5TokenFlag::Sealed | Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey,
+            Krb5KeyUsage::AcceptorSeal => {
+                Krb5TokenFlag::Sealed | Krb5TokenFlag::SentByAcceptor | Krb5TokenFlag::AcceptorSubkey
+            },
             Krb5KeyUsage::InitiatorSeal => Krb5TokenFlag::Sealed | Krb5TokenFlag::AcceptorSubkey,
         };
         flags.bits().to_be_bytes()
@@ -566,7 +604,14 @@ impl Krb5Context {
         krb5_error_code_escape_hatch(self, code)?;
 
         let mut encrypted_length: usize = 0;
-        let code = unsafe { krb5_c_encrypt_length(self.context, key.keyblock.enctype, plain_data.len(), &mut encrypted_length) };
+        let code = unsafe {
+            krb5_c_encrypt_length(
+                self.context,
+                key.keyblock.enctype,
+                plain_data.len(),
+                &mut encrypted_length,
+            )
+        };
         krb5_error_code_escape_hatch(self, code)?;
 
         let input_buffer = krb5_data {
@@ -618,7 +663,13 @@ impl Krb5Context {
     }
 
     /// Decrypt and validate a GSS Wrap token as per RFC 4121 section 4.2.4
-    pub fn decrypt(&self, encoded_data: &[u8], key: &Krb5Keyblock, usage: Krb5KeyUsage, remote_seq_num: Option<i32>) -> Result<Vec<u8>, Krb5Error> {
+    pub fn decrypt(
+        &self,
+        encoded_data: &[u8],
+        key: &Krb5Keyblock,
+        usage: Krb5KeyUsage,
+        remote_seq_num: Option<i32>,
+    ) -> Result<Vec<u8>, Krb5Error> {
         let (mut header, mut cipher_text) = Krb5Context::parse_wrap_token(encoded_data, usage, remote_seq_num)?;
 
         let cipher_data = krb5_enc_data {
@@ -640,7 +691,16 @@ impl Krb5Context {
         };
 
         let key = key.copy()?;
-        let code = unsafe { krb5_c_decrypt(self.context, key.keyblock, usage as i32, null(), &cipher_data, &mut plain_data) };
+        let code = unsafe {
+            krb5_c_decrypt(
+                self.context,
+                key.keyblock,
+                usage as i32,
+                null(),
+                &cipher_data,
+                &mut plain_data,
+            )
+        };
         krb5_error_code_escape_hatch(self, code)?;
 
         let plain_with_header =
@@ -650,7 +710,8 @@ impl Krb5Context {
         let plain = plain_with_header[0..header_pos].to_vec();
         let decrypted_header = &mut plain_with_header[header_pos..];
 
-        /* As per RFC 4121, section 4.2.4, the rrc field is set to 0 in the encrypted header. After this, it should be the same as the clear text header */
+        /* As per RFC 4121, section 4.2.4, the rrc field is set to 0 in the encrypted header. After this,
+         * it should be the same as the clear text header */
         header[6..8].copy_from_slice(&0_u16.to_be_bytes());
         if decrypted_header != header {
             return Err(Krb5Error::InvalidToken {message: format!("Kerberos token decryption failed, cleartext header modified; cleartext_header='{:?}', decrypted_header='{:?}'", HexDump::from(&header), HexDump::from(&decrypted_header))});
@@ -660,7 +721,11 @@ impl Krb5Context {
     }
 
     /// Parse the GSS Wrap token into clear text header and cipher text parts.
-    fn parse_wrap_token(encoded_data: &[u8], usage: Krb5KeyUsage, seq_num: Option<i32>) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
+    fn parse_wrap_token(
+        encoded_data: &[u8],
+        usage: Krb5KeyUsage,
+        seq_num: Option<i32>,
+    ) -> Result<(Vec<u8>, Vec<u8>), Krb5Error> {
         let (header, cipher_text) = (encoded_data[..16].to_vec(), &encoded_data[16..]);
 
         let rrc = Krb5Context::parse_and_verify_wrap_token_header(header.as_slice(), usage, seq_num)?;
@@ -670,8 +735,13 @@ impl Krb5Context {
         Ok((header, cipher_text))
     }
 
-    fn parse_and_verify_wrap_token_header(token_header: &[u8], usage: Krb5KeyUsage, expected_seq_num: Option<i32>) -> Result<u16, Krb5Error> {
-        let mut parse_wrap_token_header = tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
+    fn parse_and_verify_wrap_token_header(
+        token_header: &[u8],
+        usage: Krb5KeyUsage,
+        expected_seq_num: Option<i32>,
+    ) -> Result<u16, Krb5Error> {
+        let mut parse_wrap_token_header =
+            tuple::<_, _, (&[u8], ErrorKind), _>((be_u16, be_u8, take(1u8), be_u16, be_u16, be_u64));
         let (_, (_, _, _, _, rrc, token_seq_num)) = parse_wrap_token_header(token_header).or_else(|_| {
             Err(Krb5Error::InvalidToken {
                 message: String::from("Kerberos token decryption failed, short header"),
@@ -860,13 +930,15 @@ impl<'a> Krb5AuthContext<'a> {
         krb5_error_code_escape_hatch(&self.context, code)?;
 
         let keyblock_ptr = unsafe { keyblock_ptr.assume_init().as_mut() };
-        let keyblock_ptr = keyblock_ptr.ok_or_else (|| {
-            return Krb5Error::LibraryError { message: String::from("get_sendsubkey failed, auth context doesn't contain a subkey;") }
+        let keyblock_ptr = keyblock_ptr.ok_or_else(|| {
+            return Krb5Error::LibraryError {
+                message: String::from("get_sendsubkey failed, auth context doesn't contain a subkey;"),
+            };
         })?;
 
         let key = Krb5Keyblock {
-                context: &self.context,
-                keyblock: keyblock_ptr
+            context: &self.context,
+            keyblock: keyblock_ptr,
         };
 
         Ok(key)
@@ -915,7 +987,8 @@ impl<'a> Krb5Authenticator<'a> {
     pub fn get_flags(&self) -> Result<u32, Krb5Error> {
         let checksum = unsafe {
             let checksum_c = *(*self.authenticator).checksum;
-            slice::from_raw_parts(checksum_c.contents, checksum_c.length as usize)};
+            slice::from_raw_parts(checksum_c.contents, checksum_c.length as usize)
+        };
 
         let mut parse_checksum = tuple::<_, _, (&[u8], nom::error::ErrorKind), _>((take(20u8), le_u32));
         let (_, (_, flags)) = parse_checksum(checksum).or_else(|_| {

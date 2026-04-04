@@ -6,8 +6,15 @@ pub use cccol::Krb5CCCol;
 
 mod context;
 pub use context::{
-    Krb5AuthContext, Krb5Context, Krb5AuthContextOptions, Krb5KeyUsage, KRB5_AUTH_CONTEXT_DO_SEQUENCE, KRB5_AUTH_CONTEXT_DO_TIME,
-    KRB5_AUTH_CONTEXT_PERMIT_ALL, KRB5_AUTH_CONTEXT_RET_SEQUENCE, KRB5_AUTH_CONTEXT_RET_TIME,
+    Krb5AuthContext,
+    Krb5AuthContextOptions,
+    Krb5Context,
+    Krb5KeyUsage,
+    KRB5_AUTH_CONTEXT_DO_SEQUENCE,
+    KRB5_AUTH_CONTEXT_DO_TIME,
+    KRB5_AUTH_CONTEXT_PERMIT_ALL,
+    KRB5_AUTH_CONTEXT_RET_SEQUENCE,
+    KRB5_AUTH_CONTEXT_RET_TIME,
     KRB5_AUTH_CONTEXT_USE_SUBKEY,
 };
 

@@ -172,12 +172,12 @@ impl<'a> Krb5Keyblock<'a> {
 
     pub fn new_from_raw(context: &'a Krb5Context, from: *const krb5_keyblock) -> Result<Krb5Keyblock<'a>, Krb5Error> {
         let mut keyblock_ptr: MaybeUninit<*mut krb5_keyblock> = MaybeUninit::zeroed();
-        let code = unsafe {krb5_copy_keyblock(context.context, from, keyblock_ptr.as_mut_ptr())};
+        let code = unsafe { krb5_copy_keyblock(context.context, from, keyblock_ptr.as_mut_ptr()) };
         krb5_error_code_escape_hatch(&context, code)?;
 
         let keyblock = Krb5Keyblock {
             context: &context,
-            keyblock: unsafe {&mut *keyblock_ptr.assume_init()}
+            keyblock: unsafe { &mut *keyblock_ptr.assume_init() },
         };
         Ok(keyblock)
     }
