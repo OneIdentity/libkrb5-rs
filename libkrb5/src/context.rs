@@ -279,7 +279,6 @@ impl Krb5Context {
         second_ticket: &Vec<u8>,
     ) -> Result<Krb5Creds, Krb5Error> {
         let tgs_options: krb5_flags = (KRB5_GC_FORWARDABLE | KRB5_GC_USER_USER) as i32;
-        let mut creds_ptr: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();
 
         let second_ticket_buffer = unsafe {
             let buffer = std::alloc::alloc_zeroed(std::alloc::Layout::for_value(second_ticket.as_slice()));
@@ -302,10 +301,16 @@ impl Krb5Context {
         }
         ccache.store(in_creds)?;
 
+        // Free the old server principal before overwriting to prevent a leak
+        // (krb5_get_init_creds_password allocates a server principal like krbtgt/REALM)
+        if !in_creds.creds.server.is_null() {
+            unsafe { krb5_free_principal(self.context, in_creds.creds.server) };
+        }
         let target_principal = ManuallyDrop::new(Krb5Principal::new_from_raw(self, principal.principal)?);
         in_creds.creds.server = target_principal.principal;
         principal.data().set_type(KRB5_NT_SRV_INST as i32);
 
+        let mut creds_ptr: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();
         let code: krb5_error_code = unsafe {
             krb5_get_credentials(
                 self.context,
@@ -317,10 +322,15 @@ impl Krb5Context {
         };
         krb5_error_code_escape_hatch(self, code)?;
 
+        let creds_ptr = unsafe { creds_ptr.assume_init() };
         let creds = Krb5Creds {
             context: &self,
-            creds: unsafe { *creds_ptr.assume_init() },
+            creds: unsafe { *creds_ptr },
         };
+
+        // At this point Krb5Creds gains ownership of the content, but not the whole struct, thus we
+        // still have to free it.
+        unsafe { libc::free(creds_ptr as *mut libc::c_void) };
 
         Ok(creds)
     }

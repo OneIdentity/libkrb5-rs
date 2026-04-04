@@ -135,10 +135,16 @@ impl<'a> Krb5Creds<'a> {
         let code = unsafe { krb5_copy_creds(self.context.context, &self.creds, out_creds.as_mut_ptr()) };
         krb5_error_code_escape_hatch(self.context, code)?;
 
+        let out_creds_ptr = unsafe { out_creds.assume_init() };
         let out_creds = Krb5Creds {
             context: &self.context,
-            creds: unsafe { *out_creds.assume_init() },
+            creds: unsafe { *out_creds_ptr },
         };
+
+        // Memory for the new krb5_creds struct is allocated by krb5_copy_creds. At this point
+        // Krb5Creds gains ownership of the content, but not the whole struct, thus we
+        // still have to free it.
+        unsafe { libc::free(out_creds_ptr as *mut libc::c_void) };
 
         Ok(out_creds)
     }
