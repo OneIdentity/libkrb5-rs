@@ -16,7 +16,7 @@ impl<'a> Krb5CCCol<'a> {
     pub fn new(context: &Krb5Context) -> Result<Krb5CCCol, Krb5Error> {
         let mut cursor_ptr: MaybeUninit<krb5_cccol_cursor> = MaybeUninit::zeroed();
 
-        let code: krb5_error_code = unsafe { krb5_cccol_cursor_new(context.context, cursor_ptr.as_mut_ptr()) };
+        let code: krb5_error_code = unsafe { krb5_cccol_cursor_new(context.get_context(), cursor_ptr.as_mut_ptr()) };
 
         krb5_error_code_escape_hatch(context, code)?;
 
@@ -32,7 +32,7 @@ impl<'a> Krb5CCCol<'a> {
 impl<'a> Drop for Krb5CCCol<'a> {
     fn drop(&mut self) {
         unsafe {
-            krb5_cccol_cursor_free(self.context.context, &mut self.cursor);
+            krb5_cccol_cursor_free(self.context.get_context(), &mut self.cursor);
         }
     }
 }
@@ -44,7 +44,7 @@ impl<'a> Iterator for Krb5CCCol<'a> {
         let mut ccache_ptr: MaybeUninit<krb5_ccache> = MaybeUninit::zeroed();
 
         let code: krb5_error_code =
-            unsafe { krb5_cccol_cursor_next(self.context.context, self.cursor, ccache_ptr.as_mut_ptr()) };
+            unsafe { krb5_cccol_cursor_next(self.context.get_context(), self.cursor, ccache_ptr.as_mut_ptr()) };
 
         krb5_error_code_escape_hatch(self.context, code).ok()?;
 

@@ -16,7 +16,7 @@ pub struct Krb5Principal<'a> {
 impl<'a> Drop for Krb5Principal<'a> {
     fn drop(&mut self) {
         unsafe {
-            krb5_free_principal(self.context.context, self.principal);
+            krb5_free_principal(self.context.get_context(), self.principal);
         }
     }
 }
@@ -24,7 +24,7 @@ impl<'a> Drop for Krb5Principal<'a> {
 impl<'a> Krb5Principal<'a> {
     pub fn new_from_raw(context: &Krb5Context, raw_principal: krb5_principal) -> Result<Krb5Principal, Krb5Error> {
         let mut out_principal: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
-        let code = unsafe { krb5_copy_principal(context.context, raw_principal, out_principal.as_mut_ptr()) };
+        let code = unsafe { krb5_copy_principal(context.get_context(), raw_principal, out_principal.as_mut_ptr()) };
         krb5_error_code_escape_hatch(context, code)?;
 
         let out_principal = Krb5Principal {
@@ -63,12 +63,12 @@ impl<'a> Krb5PrincipalData<'a> {
     pub fn unparse(&mut self) -> Result<Option<String>, Krb5Error> {
         let mut name: MaybeUninit<*mut c_char> = MaybeUninit::zeroed();
         let code: krb5_error_code =
-            unsafe { krb5_unparse_name(self.context.context, &self.principal_data, name.as_mut_ptr()) };
+            unsafe { krb5_unparse_name(self.context.get_context(), &self.principal_data, name.as_mut_ptr()) };
         krb5_error_code_escape_hatch(&self.context, code)?;
 
         let name = unsafe { name.assume_init() };
         let string = c_string_to_string(name)?;
-        unsafe { krb5_free_unparsed_name(self.context.context, name) };
+        unsafe { krb5_free_unparsed_name(self.context.get_context(), name) };
 
         Ok(Some(string))
     }
@@ -76,7 +76,7 @@ impl<'a> Krb5PrincipalData<'a> {
     pub fn compare(&mut self, principal_data: Krb5PrincipalData) -> bool {
         let result = unsafe {
             krb5_principal_compare(
-                self.context.context,
+                self.context.get_context(),
                 &self.principal_data,
                 &principal_data.principal_data,
             )
