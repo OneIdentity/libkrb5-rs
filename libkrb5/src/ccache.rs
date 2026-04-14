@@ -10,12 +10,12 @@ use crate::principal::Krb5Principal;
 use crate::strconv::{c_string_to_string, string_to_c_string};
 
 #[derive(Debug)]
-pub struct Krb5CCache<'a> {
-    pub(crate) context: &'a Krb5Context,
+pub struct Krb5CCache {
+    pub(crate) context: Krb5Context,
     pub(crate) ccache: krb5_ccache,
 }
 
-impl<'a> Drop for Krb5CCache<'a> {
+impl Drop for Krb5CCache {
     fn drop(&mut self) {
         unsafe {
             krb5_cc_destroy(self.context.get_context(), self.ccache);
@@ -23,16 +23,16 @@ impl<'a> Drop for Krb5CCache<'a> {
     }
 }
 
-impl<'a> Krb5CCache<'a> {
+impl Krb5CCache {
     pub fn default(context: &Krb5Context) -> Result<Krb5CCache, Krb5Error> {
         let mut ccache_ptr: MaybeUninit<krb5_ccache> = MaybeUninit::zeroed();
 
         let code: krb5_error_code = unsafe { krb5_cc_default(context.get_context(), ccache_ptr.as_mut_ptr()) };
 
-        krb5_error_code_escape_hatch(context, code)?;
+        krb5_error_code_escape_hatch(&context, code)?;
 
         let cursor = Krb5CCache {
-            context,
+            context: context.clone(),
             ccache: unsafe { ccache_ptr.assume_init() },
         };
 
@@ -48,7 +48,7 @@ impl<'a> Krb5CCache<'a> {
     pub fn destroy(self) -> Result<(), Krb5Error> {
         let code = unsafe { krb5_cc_destroy(self.context.get_context(), self.ccache) };
 
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
         Ok(())
     }
@@ -59,10 +59,10 @@ impl<'a> Krb5CCache<'a> {
         let code: krb5_error_code =
             unsafe { krb5_cc_dup(self.context.get_context(), self.ccache, ccache_ptr.as_mut_ptr()) };
 
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
         let ccache = Krb5CCache {
-            context: self.context,
+            context: self.context.clone(),
             ccache: unsafe { ccache_ptr.assume_init() },
         };
 
@@ -81,7 +81,7 @@ impl<'a> Krb5CCache<'a> {
         let code: krb5_error_code =
             unsafe { krb5_cc_get_principal(self.context.get_context(), self.ccache, principal_ptr.as_mut_ptr()) };
 
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
         let principal_ptr = unsafe { principal_ptr.assume_init() };
 
@@ -90,7 +90,7 @@ impl<'a> Krb5CCache<'a> {
         }
 
         let principal = Krb5Principal {
-            context: &self.context,
+            context: self.context.clone(),
             principal: principal_ptr,
         };
 
@@ -107,7 +107,7 @@ impl<'a> Krb5CCache<'a> {
         let code: krb5_error_code =
             unsafe { krb5_cc_initialize(self.context.get_context(), self.ccache, principal.principal) };
 
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
         Ok(())
     }
@@ -117,11 +117,11 @@ impl<'a> Krb5CCache<'a> {
         let code: krb5_error_code =
             unsafe { krb5_cc_store_cred(self.context.get_context(), self.ccache, &mut creds.creds) };
 
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
         Ok(())
     }
 
-    pub fn new_unique(context: &'a Krb5Context, cctype: &str) -> Result<Krb5CCache<'a>, Krb5Error> {
+    pub fn new_unique(context: &Krb5Context, cctype: &str) -> Result<Krb5CCache, Krb5Error> {
         let cctype = string_to_c_string(cctype)?;
 
         let mut ccache_ptr: MaybeUninit<krb5_ccache> = MaybeUninit::zeroed();
@@ -135,17 +135,17 @@ impl<'a> Krb5CCache<'a> {
             )
         };
 
-        krb5_error_code_escape_hatch(context, code)?;
+        krb5_error_code_escape_hatch(&context, code)?;
 
         let cursor = Krb5CCache {
-            context,
+            context: context.clone(),
             ccache: unsafe { ccache_ptr.assume_init() },
         };
 
         Ok(cursor)
     }
 
-    pub fn resolve(context: &'a Krb5Context, name: &str) -> Result<Krb5CCache<'a>, Krb5Error> {
+    pub fn resolve(context: &Krb5Context, name: &str) -> Result<Krb5CCache, Krb5Error> {
         let name = string_to_c_string(name)?;
 
         let mut ccache_ptr: MaybeUninit<krb5_ccache> = MaybeUninit::zeroed();
@@ -153,10 +153,10 @@ impl<'a> Krb5CCache<'a> {
         let code: krb5_error_code =
             unsafe { krb5_cc_resolve(context.get_context(), name.as_ptr(), ccache_ptr.as_mut_ptr()) };
 
-        krb5_error_code_escape_hatch(context, code)?;
+        krb5_error_code_escape_hatch(&context, code)?;
 
         let cursor = Krb5CCache {
-            context,
+            context: context.clone(),
             ccache: unsafe { ccache_ptr.assume_init() },
         };
 

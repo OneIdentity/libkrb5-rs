@@ -148,7 +148,7 @@ impl Krb5Context {
         *Rc::as_ref(&self.context)
     }
 
-    pub fn build_principal<'a>(&'a self, realm: &'a str, args: &'a [String]) -> Result<Krb5Principal<'a>, Krb5Error> {
+    pub fn build_principal<'a>(&'a self, realm: &'a str, args: &'a [String]) -> Result<Krb5Principal, Krb5Error> {
         let crealm = string_to_c_string(realm)?;
         let realml = realm.len() as u32;
 
@@ -216,7 +216,7 @@ impl Krb5Context {
         krb5_error_code_escape_hatch(self, code)?;
 
         let principal = Krb5Principal {
-            context: self,
+            context: self.clone(),
             principal: unsafe { principal_ptr.assume_init() },
         };
 
@@ -231,7 +231,7 @@ impl Krb5Context {
         krb5_error_code_escape_hatch(self, code)?;
 
         let principal = Krb5Principal {
-            context: self,
+            context: self.clone(),
             principal: unsafe { principal_ptr.assume_init() },
         };
 
@@ -345,7 +345,7 @@ impl Krb5Context {
 
         let creds_ptr = unsafe { creds_ptr.assume_init() };
         let creds = Krb5Creds {
-            context: &self,
+            context: self.clone(),
             creds: unsafe { *creds_ptr },
         };
 
@@ -460,7 +460,7 @@ impl Krb5Context {
         krb5_error_code_escape_hatch(self, code)?;
 
         let ticket = Krb5Ticket {
-            context: self,
+            context: self.clone(),
             ticket: unsafe { ticket_ptr.assume_init() },
         };
 
@@ -878,20 +878,20 @@ impl Krb5Context {
 }
 
 #[derive(Debug)]
-pub struct Krb5AuthContext<'a> {
-    pub(crate) context: &'a Krb5Context,
+pub struct Krb5AuthContext {
+    pub(crate) context: Krb5Context,
     pub(crate) auth_context: krb5_auth_context,
 }
 
-impl<'a> Krb5AuthContext<'a> {
-    pub fn new(context: &'a Krb5Context, session_key: Option<&Krb5Keyblock>) -> Result<Krb5AuthContext<'a>, Krb5Error> {
+impl Krb5AuthContext {
+    pub fn new(context: &Krb5Context, session_key: Option<&Krb5Keyblock>) -> Result<Krb5AuthContext, Krb5Error> {
         let mut auth_context_ptr: MaybeUninit<krb5_auth_context> = MaybeUninit::zeroed();
 
         let code: krb5_error_code = unsafe { krb5_auth_con_init(context.get_context(), auth_context_ptr.as_mut_ptr()) };
-        krb5_error_code_escape_hatch(context, code)?;
+        krb5_error_code_escape_hatch(&context, code)?;
 
         let auth_context = Krb5AuthContext {
-            context: &context,
+            context: context.clone(),
             auth_context: unsafe { auth_context_ptr.assume_init() },
         };
 
@@ -909,7 +909,7 @@ impl<'a> Krb5AuthContext<'a> {
         let key = keyblock.copy()?;
         let code: krb5_error_code =
             unsafe { krb5_auth_con_setuseruserkey(self.context.get_context(), self.auth_context, key.keyblock) };
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
         Ok(())
     }
@@ -934,7 +934,7 @@ impl<'a> Krb5AuthContext<'a> {
 
     pub fn set_flags(&self, flags: i32) -> Result<(), Krb5Error> {
         let code = unsafe { krb5_auth_con_setflags(self.context.get_context(), self.auth_context, flags) };
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
         Ok(())
     }
@@ -948,10 +948,10 @@ impl<'a> Krb5AuthContext<'a> {
                 authenticator_ptr.as_mut_ptr(),
             )
         };
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
         let authenticator = Krb5Authenticator {
-            context: self.context,
+            context: self.context.clone(),
             authenticator: unsafe { authenticator_ptr.assume_init() },
         };
 
@@ -973,7 +973,7 @@ impl<'a> Krb5AuthContext<'a> {
         })?;
 
         let key = Krb5Keyblock {
-            context: &self.context,
+            context: self.context.clone(),
             keyblock: keyblock_ptr,
         };
 
@@ -986,18 +986,18 @@ impl<'a> Krb5AuthContext<'a> {
     }
 }
 
-impl<'a> Drop for Krb5AuthContext<'a> {
+impl Drop for Krb5AuthContext {
     fn drop(&mut self) {
         unsafe { krb5_auth_con_free(self.context.get_context(), self.auth_context) };
     }
 }
 
-pub struct Krb5Authenticator<'a> {
-    context: &'a Krb5Context,
+pub struct Krb5Authenticator {
+    context: Krb5Context,
     authenticator: *mut krb5_authenticator,
 }
 
-impl<'a> Drop for Krb5Authenticator<'a> {
+impl Drop for Krb5Authenticator {
     fn drop(&mut self) {
         unsafe {
             krb5_free_authenticator(self.context.get_context(), self.authenticator);
@@ -1005,15 +1005,15 @@ impl<'a> Drop for Krb5Authenticator<'a> {
     }
 }
 
-impl<'a> Krb5Authenticator<'a> {
+impl Krb5Authenticator {
     pub fn get_client_principal(&self) -> Result<Krb5Principal, Krb5Error> {
         let principal = unsafe { (*self.authenticator).client };
         let mut out_princ: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
         let code = unsafe { krb5_copy_principal(self.context.get_context(), principal, out_princ.as_mut_ptr()) };
-        krb5_error_code_escape_hatch(self.context, code)?;
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
         let client_princ = Krb5Principal {
-            context: &self.context,
+            context: self.context.clone(),
             principal: unsafe { out_princ.assume_init() },
         };
 
@@ -1038,12 +1038,12 @@ impl<'a> Krb5Authenticator<'a> {
 }
 
 #[derive(Debug)]
-pub struct Krb5Ticket<'a> {
-    context: &'a Krb5Context,
+pub struct Krb5Ticket {
+    context: Krb5Context,
     ticket: *mut krb5_ticket,
 }
 
-impl<'a> Drop for Krb5Ticket<'a> {
+impl Drop for Krb5Ticket {
     fn drop(&mut self) {
         unsafe {
             krb5_free_ticket(self.context.get_context(), self.ticket);

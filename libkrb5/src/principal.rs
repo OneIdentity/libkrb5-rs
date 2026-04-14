@@ -8,12 +8,12 @@ use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::strconv::c_string_to_string;
 
 #[derive(Debug)]
-pub struct Krb5Principal<'a> {
-    pub(crate) context: &'a Krb5Context,
+pub struct Krb5Principal {
+    pub(crate) context: Krb5Context,
     pub(crate) principal: krb5_principal,
 }
 
-impl<'a> Drop for Krb5Principal<'a> {
+impl Drop for Krb5Principal {
     fn drop(&mut self) {
         unsafe {
             krb5_free_principal(self.context.get_context(), self.principal);
@@ -21,14 +21,14 @@ impl<'a> Drop for Krb5Principal<'a> {
     }
 }
 
-impl<'a> Krb5Principal<'a> {
+impl Krb5Principal {
     pub fn new_from_raw(context: &Krb5Context, raw_principal: krb5_principal) -> Result<Krb5Principal, Krb5Error> {
         let mut out_principal: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
         let code = unsafe { krb5_copy_principal(context.get_context(), raw_principal, out_principal.as_mut_ptr()) };
-        krb5_error_code_escape_hatch(context, code)?;
+        krb5_error_code_escape_hatch(&context, code)?;
 
         let out_principal = Krb5Principal {
-            context,
+            context: context.clone(),
             principal: unsafe { out_principal.assume_init() },
         };
         Ok(out_principal)
