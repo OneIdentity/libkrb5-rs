@@ -113,7 +113,7 @@ impl Krb5Creds {
         Some(ticket)
     }
 
-    pub fn keyblock(&mut self) -> Result<Krb5Keyblock, Krb5Error> {
+    pub fn keyblock<'a>(&mut self) -> Result<Krb5Keyblock<'a>, Krb5Error> {
         Krb5Keyblock::new_from_raw(&self.context, &mut self.creds.keyblock)
     }
 

@@ -31,7 +31,7 @@ impl Krb5Principal {
         Ok(unsafe { out_principal.assume_init() })
     }
 
-    pub fn data(&self) -> Krb5PrincipalData {
+    pub fn data<'a>(&'a self) -> Krb5PrincipalData<'a> {
         Krb5PrincipalData {
             context: &self.context,
             principal_data: unsafe { *self.principal },

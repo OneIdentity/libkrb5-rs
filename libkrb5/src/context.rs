@@ -43,7 +43,7 @@ struct HexDump<'a> {
 }
 
 impl<'a> HexDump<'a> {
-    fn from(data: &[u8]) -> HexDump {
+    fn from(data: &'a [u8]) -> HexDump<'a> {
         HexDump { data }
     }
 }
@@ -68,7 +68,6 @@ pub enum Krb5KeyUsage {
     InitiatorSeal = 24,
     InitiatorSign = 25,
 }
-
 
 bitflags! {
     pub struct Krb5TokenFlag: u8 {
@@ -952,7 +951,7 @@ impl Krb5AuthContext {
         Ok(authenticator)
     }
 
-    pub fn get_sendsubkey(&self) -> Result<Krb5Keyblock, Krb5Error> {
+    pub fn get_sendsubkey<'a>(&self) -> Result<Krb5Keyblock<'a>, Krb5Error> {
         let mut keyblock_ptr: MaybeUninit<*mut krb5_keyblock> = MaybeUninit::zeroed();
         let code = unsafe {
             krb5_auth_con_getsendsubkey(self.context.get_context(), self.auth_context, keyblock_ptr.as_mut_ptr())
