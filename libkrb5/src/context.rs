@@ -6,7 +6,7 @@ use nom::{bytes::streaming::take, sequence::tuple};
 use std::ffi::CStr;
 use std::fmt::{Debug, Formatter};
 use std::iter;
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 use std::ptr::null;
 use std::rc::Rc;
@@ -295,7 +295,7 @@ impl Krb5Context {
 
     pub fn req_tgs(
         &self,
-        in_creds: &mut Krb5Creds,
+        mut in_creds: Krb5Creds,
         principal: &Krb5Principal,
         second_ticket: &Vec<u8>,
     ) -> Result<Krb5Creds, Krb5Error> {
@@ -320,15 +320,9 @@ impl Krb5Context {
             let principal: Krb5Principal = in_creds.get_client_principal()?;
             ccache.initialize(&principal)?;
         }
-        ccache.store(in_creds)?;
+        ccache.store(&in_creds)?;
 
-        // Free the old server principal before overwriting to prevent a leak
-        // (krb5_get_init_creds_password allocates a server principal like krbtgt/REALM)
-        if !in_creds.creds.server.is_null() {
-            unsafe { krb5_free_principal(self.get_context(), in_creds.creds.server) };
-        }
-        let target_principal = ManuallyDrop::new(Krb5Principal::new_from_raw(self, principal.principal)?);
-        in_creds.creds.server = target_principal.principal;
+        in_creds.set_server_principal(principal)?;
         principal.data().set_type(KRB5_NT_SRV_INST as i32);
 
         let mut creds_ptr: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();

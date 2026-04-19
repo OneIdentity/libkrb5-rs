@@ -131,6 +131,17 @@ impl Krb5Creds {
         Ok(client_princ)
     }
 
+    pub fn set_server_principal(&mut self, principal: &Krb5Principal) -> Result<(), Krb5Error> {
+        // Free the old server principal before overwriting to prevent a leak
+        // (krb5_get_init_creds_password allocates a server principal like krbtgt/REALM)
+        if !self.creds.server.is_null() {
+            unsafe { krb5_free_principal(self.context.get_context(), self.creds.server) };
+        }
+
+        self.creds.server = principal.clone_into_raw()?;
+        Ok(())
+    }
+
     pub fn clone(&self) -> Result<Self, Krb5Error> {
         let mut out_creds: MaybeUninit<*mut krb5_creds> = MaybeUninit::zeroed();
         let code = unsafe { krb5_copy_creds(self.context.get_context(), &self.creds, out_creds.as_mut_ptr()) };

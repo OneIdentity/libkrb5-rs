@@ -22,16 +22,13 @@ impl Drop for Krb5Principal {
 }
 
 impl Krb5Principal {
-    pub fn new_from_raw(context: &Krb5Context, raw_principal: krb5_principal) -> Result<Krb5Principal, Krb5Error> {
+    pub fn clone_into_raw(&self) -> Result<krb5_principal, Krb5Error> {
         let mut out_principal: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
-        let code = unsafe { krb5_copy_principal(context.get_context(), raw_principal, out_principal.as_mut_ptr()) };
-        krb5_error_code_escape_hatch(&context, code)?;
+        let code =
+            unsafe { krb5_copy_principal(self.context.get_context(), self.principal, out_principal.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
-        let out_principal = Krb5Principal {
-            context: context.clone(),
-            principal: unsafe { out_principal.assume_init() },
-        };
-        Ok(out_principal)
+        Ok(unsafe { out_principal.assume_init() })
     }
 
     pub fn data(&self) -> Krb5PrincipalData {
