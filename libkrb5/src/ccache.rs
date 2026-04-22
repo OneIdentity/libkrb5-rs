@@ -45,14 +45,6 @@ impl Krb5CCache {
         c_string_to_string(name)
     }
 
-    pub fn destroy(self) -> Result<(), Krb5Error> {
-        let code = unsafe { krb5_cc_destroy(self.context.get_context(), self.ccache) };
-
-        krb5_error_code_escape_hatch(&self.context, code)?;
-
-        Ok(())
-    }
-
     pub fn dup(&self) -> Result<Krb5CCache, Krb5Error> {
         let mut ccache_ptr: MaybeUninit<krb5_ccache> = MaybeUninit::zeroed();
 
