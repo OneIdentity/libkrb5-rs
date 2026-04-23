@@ -113,8 +113,8 @@ impl Krb5Creds {
         Some(ticket)
     }
 
-    pub fn keyblock<'a>(&mut self) -> Result<Krb5Keyblock<'a>, Krb5Error> {
-        Krb5Keyblock::new_from_raw(&self.context, &mut self.creds.keyblock)
+    pub fn keyblock(&self) -> Result<Krb5Keyblock, Krb5Error> {
+        Krb5Keyblock::new_from_raw(&self.context, &self.creds.keyblock)
     }
 
     pub fn get_client_principal(&self) -> Result<Krb5Principal, Krb5Error> {
@@ -170,12 +170,12 @@ impl Drop for Krb5Creds {
     }
 }
 
-pub struct Krb5Keyblock<'a> {
+pub struct Krb5Keyblock {
     pub(crate) context: Krb5Context,
-    pub(crate) keyblock: &'a mut krb5_keyblock,
+    pub(crate) keyblock: *mut krb5_keyblock,
 }
 
-impl<'a> Drop for Krb5Keyblock<'a> {
+impl Drop for Krb5Keyblock {
     fn drop(&mut self) {
         unsafe {
             krb5_free_keyblock(self.context.get_context(), self.keyblock);
@@ -183,19 +183,19 @@ impl<'a> Drop for Krb5Keyblock<'a> {
     }
 }
 
-impl<'a> Krb5Keyblock<'a> {
+impl Krb5Keyblock {
     pub fn copy(&self) -> Result<Self, Krb5Error> {
         Krb5Keyblock::new_from_raw(&self.context, self.keyblock)
     }
 
-    pub fn new_from_raw(context: &Krb5Context, from: *const krb5_keyblock) -> Result<Krb5Keyblock<'a>, Krb5Error> {
+    pub fn new_from_raw(context: &Krb5Context, from: *const krb5_keyblock) -> Result<Krb5Keyblock, Krb5Error> {
         let mut keyblock_ptr: MaybeUninit<*mut krb5_keyblock> = MaybeUninit::zeroed();
         let code = unsafe { krb5_copy_keyblock(context.get_context(), from, keyblock_ptr.as_mut_ptr()) };
         krb5_error_code_escape_hatch(&context, code)?;
 
         let keyblock = Krb5Keyblock {
             context: context.clone(),
-            keyblock: unsafe { &mut *keyblock_ptr.assume_init() },
+            keyblock: unsafe { keyblock_ptr.assume_init() },
         };
         Ok(keyblock)
     }

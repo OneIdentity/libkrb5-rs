@@ -628,7 +628,7 @@ impl Krb5Context {
         let code = unsafe {
             krb5_c_crypto_length(
                 self.get_context(),
-                key.keyblock.enctype,
+                (*key.keyblock).enctype,
                 KRB5_CRYPTO_TYPE_TRAILER as i32,
                 &mut trailer_length,
             )
@@ -639,7 +639,7 @@ impl Krb5Context {
         let code = unsafe {
             krb5_c_encrypt_length(
                 self.get_context(),
-                key.keyblock.enctype,
+                (*key.keyblock).enctype,
                 plain_data.len(),
                 &mut encrypted_length,
             )
@@ -656,7 +656,7 @@ impl Krb5Context {
         let mut cipher_data = krb5_enc_data {
             magic: 0,
             kvno: 0,
-            enctype: key.keyblock.enctype,
+            enctype: unsafe { (*key.keyblock).enctype },
             ciphertext: krb5_data {
                 magic: 0,
                 data: encrypted_data_buffer.as_mut_ptr() as *mut i8,
@@ -707,7 +707,7 @@ impl Krb5Context {
         let cipher_data = krb5_enc_data {
             magic: 0,
             kvno: 0,
-            enctype: key.keyblock.enctype,
+            enctype: unsafe { (*key.keyblock).enctype },
             ciphertext: krb5_data {
                 magic: 0,
                 data: cipher_text.as_mut_ptr() as *mut i8,
@@ -951,19 +951,19 @@ impl Krb5AuthContext {
         Ok(authenticator)
     }
 
-    pub fn get_sendsubkey<'a>(&self) -> Result<Krb5Keyblock<'a>, Krb5Error> {
+    pub fn get_sendsubkey(&self) -> Result<Krb5Keyblock, Krb5Error> {
         let mut keyblock_ptr: MaybeUninit<*mut krb5_keyblock> = MaybeUninit::zeroed();
         let code = unsafe {
             krb5_auth_con_getsendsubkey(self.context.get_context(), self.auth_context, keyblock_ptr.as_mut_ptr())
         };
         krb5_error_code_escape_hatch(&self.context, code)?;
 
-        let keyblock_ptr = unsafe { keyblock_ptr.assume_init().as_mut() };
-        let keyblock_ptr = keyblock_ptr.ok_or_else(|| {
-            return Krb5Error::LibraryError {
+        let keyblock_ptr = unsafe { keyblock_ptr.assume_init() };
+        if keyblock_ptr.is_null() {
+            return Err(Krb5Error::LibraryError {
                 message: String::from("get_sendsubkey failed, auth context doesn't contain a subkey;"),
-            };
-        })?;
+            });
+        }
 
         let key = Krb5Keyblock {
             context: self.context.clone(),
