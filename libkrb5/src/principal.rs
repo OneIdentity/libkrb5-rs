@@ -8,33 +8,30 @@ use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::strconv::c_string_to_string;
 
 #[derive(Debug)]
-pub struct Krb5Principal<'a> {
-    pub(crate) context: &'a Krb5Context,
+pub struct Krb5Principal {
+    pub(crate) context: Krb5Context,
     pub(crate) principal: krb5_principal,
 }
 
-impl<'a> Drop for Krb5Principal<'a> {
+impl Drop for Krb5Principal {
     fn drop(&mut self) {
         unsafe {
-            krb5_free_principal(self.context.context, self.principal);
+            krb5_free_principal(self.context.get_context(), self.principal);
         }
     }
 }
 
-impl<'a> Krb5Principal<'a> {
-    pub fn new_from_raw(context: &Krb5Context, raw_principal: krb5_principal) -> Result<Krb5Principal, Krb5Error> {
+impl Krb5Principal {
+    pub fn clone_into_raw(&self) -> Result<krb5_principal, Krb5Error> {
         let mut out_principal: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
-        let code = unsafe { krb5_copy_principal(context.context, raw_principal, out_principal.as_mut_ptr()) };
-        krb5_error_code_escape_hatch(context, code)?;
+        let code =
+            unsafe { krb5_copy_principal(self.context.get_context(), self.principal, out_principal.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(&self.context, code)?;
 
-        let out_principal = Krb5Principal {
-            context,
-            principal: unsafe { out_principal.assume_init() },
-        };
-        Ok(out_principal)
+        Ok(unsafe { out_principal.assume_init() })
     }
 
-    pub fn data(&self) -> Krb5PrincipalData {
+    pub fn data<'a>(&'a self) -> Krb5PrincipalData<'a> {
         Krb5PrincipalData {
             context: &self.context,
             principal_data: unsafe { *self.principal },
@@ -63,12 +60,12 @@ impl<'a> Krb5PrincipalData<'a> {
     pub fn unparse(&mut self) -> Result<Option<String>, Krb5Error> {
         let mut name: MaybeUninit<*mut c_char> = MaybeUninit::zeroed();
         let code: krb5_error_code =
-            unsafe { krb5_unparse_name(self.context.context, &self.principal_data, name.as_mut_ptr()) };
+            unsafe { krb5_unparse_name(self.context.get_context(), &self.principal_data, name.as_mut_ptr()) };
         krb5_error_code_escape_hatch(&self.context, code)?;
 
         let name = unsafe { name.assume_init() };
         let string = c_string_to_string(name)?;
-        unsafe { krb5_free_unparsed_name(self.context.context, name) };
+        unsafe { krb5_free_unparsed_name(self.context.get_context(), name) };
 
         Ok(Some(string))
     }
@@ -76,7 +73,7 @@ impl<'a> Krb5PrincipalData<'a> {
     pub fn compare(&mut self, principal_data: Krb5PrincipalData) -> bool {
         let result = unsafe {
             krb5_principal_compare(
-                self.context.context,
+                self.context.get_context(),
                 &self.principal_data,
                 &principal_data.principal_data,
             )
