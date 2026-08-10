@@ -28,6 +28,11 @@ pub use libkrb5_sys::{
     KRB5_AUTH_CONTEXT_RET_SEQUENCE,
     KRB5_AUTH_CONTEXT_RET_TIME,
     KRB5_AUTH_CONTEXT_USE_SUBKEY,
+    KRB5_PRINCIPAL_PARSE_ENTERPRISE,
+    KRB5_PRINCIPAL_PARSE_IGNORE_REALM,
+    KRB5_PRINCIPAL_PARSE_NO_DEF_REALM,
+    KRB5_PRINCIPAL_PARSE_NO_REALM,
+    KRB5_PRINCIPAL_PARSE_REQUIRE_REALM,
 };
 
 lazy_static! {
@@ -227,6 +232,23 @@ impl Krb5Context {
         let mut principal_ptr: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
 
         let code = unsafe { krb5_parse_name(self.get_context(), c_name.as_ptr(), principal_ptr.as_mut_ptr()) };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        let principal = Krb5Principal {
+            context: self.clone(),
+            principal: unsafe { principal_ptr.assume_init() },
+        };
+
+        Ok(principal)
+    }
+
+    pub fn parse_principal_flags(&self, name: &str, flags: i32) -> Result<Krb5Principal, Krb5Error> {
+        let c_name = string_to_c_string(name)?;
+        let mut principal_ptr: MaybeUninit<krb5_principal> = MaybeUninit::zeroed();
+
+        let code = unsafe {
+            krb5_parse_name_flags(self.get_context(), c_name.as_ptr(), flags, principal_ptr.as_mut_ptr())
+        };
         krb5_error_code_escape_hatch(self, code)?;
 
         let principal = Krb5Principal {

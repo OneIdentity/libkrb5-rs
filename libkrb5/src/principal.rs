@@ -5,7 +5,7 @@ use libkrb5_sys::*;
 
 use crate::context::Krb5Context;
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
-use crate::strconv::c_string_to_string;
+use crate::strconv::{c_string_to_string, string_to_c_string};
 
 #[derive(Debug)]
 pub struct Krb5Principal {
@@ -36,6 +36,12 @@ impl Krb5Principal {
             context: &self.context,
             principal_data: unsafe { *self.principal },
         }
+    }
+
+    pub fn set_realm(&mut self, realm: &str) -> Result<(), Krb5Error> {
+        let c_realm = string_to_c_string(realm)?;
+        let code = unsafe { krb5_set_principal_realm(self.context.get_context(), self.principal, c_realm.as_ptr()) };
+        krb5_error_code_escape_hatch(&self.context, code)
     }
 }
 
