@@ -19,6 +19,7 @@ use crate::ccache::Krb5CCache;
 use crate::credential::{Krb5Creds, Krb5Keyblock};
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::principal::Krb5Principal;
+use crate::profile::Krb5Profile;
 use crate::strconv::{c_string_to_string, string_to_c_string};
 
 pub use libkrb5_sys::{
@@ -137,6 +138,35 @@ impl Krb5Context {
         let mut context_ptr: MaybeUninit<krb5_context> = MaybeUninit::zeroed();
 
         let code: krb5_error_code = unsafe { krb5_init_secure_context(context_ptr.as_mut_ptr()) };
+
+        let context = Krb5Context {
+            context: unsafe { Rc::new(context_ptr.assume_init()) },
+        };
+
+        krb5_error_code_escape_hatch(&context, code)?;
+
+        Ok(context)
+    }
+
+    /// Initialise a Kerberos context using a caller-supplied profile
+    /// instead of reading `/etc/krb5.conf`.
+    ///
+    /// The profile is borrowed for the duration of the call: MIT krb5
+    /// duplicates it internally (via `krb5int_dup_profile`), so the
+    /// caller retains ownership and the [`Krb5Profile`] may safely be
+    /// dropped or reused afterwards.
+    pub fn init_with_profile(profile: &Krb5Profile) -> Result<Krb5Context, Krb5Error> {
+        let _guard = CONTEXT_INIT_LOCK
+            .lock()
+            .expect("Failed to lock context initialization.");
+
+        let mut context_ptr: MaybeUninit<krb5_context> = MaybeUninit::zeroed();
+
+        // SAFETY: profile.as_ptr() is a valid profile_t; context_ptr is a
+        // valid out pointer.
+        let code: krb5_error_code = unsafe {
+            krb5_init_context_profile(profile.as_ptr(), 0, context_ptr.as_mut_ptr())
+        };
 
         let context = Krb5Context {
             context: unsafe { Rc::new(context_ptr.assume_init()) },

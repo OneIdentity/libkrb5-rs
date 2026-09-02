@@ -15,6 +15,8 @@ fn main() {
         .header("src/wrapper.h")
         .allowlist_type("(_|)krb5.*")
         .allowlist_function("krb5.*")
+        .allowlist_type("_?profile_t")
+        .allowlist_function("profile_.*")
         .allowlist_var("ADDRTYPE_.*")
         .allowlist_var("AD_TYPE_.*")
         .allowlist_var("AP_OPTS_.*")
