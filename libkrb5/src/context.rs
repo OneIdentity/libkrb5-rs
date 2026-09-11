@@ -113,13 +113,18 @@ impl Drop for Krb5Context {
 
 impl Krb5Context {
     pub fn init() -> Result<Krb5Context, Krb5Error> {
-        let _guard = CONTEXT_INIT_LOCK
-            .lock()
-            .expect("Failed to lock context initialization.");
-
         let mut context_ptr: MaybeUninit<krb5_context> = MaybeUninit::zeroed();
 
-        let code: krb5_error_code = unsafe { krb5_init_context(context_ptr.as_mut_ptr()) };
+        // The lock is only required around the libkrb5 initialisation call.
+        // It must be released before any early return, otherwise the
+        // `Drop for Krb5Context` triggered by `?` below would deadlock.
+        let code: krb5_error_code = {
+            let _guard = CONTEXT_INIT_LOCK
+                .lock()
+                .expect("Failed to lock context initialization.");
+
+            unsafe { krb5_init_context(context_ptr.as_mut_ptr()) }
+        };
 
         let context = Krb5Context {
             context: unsafe { Rc::new(context_ptr.assume_init()) },
@@ -131,13 +136,18 @@ impl Krb5Context {
     }
 
     pub fn init_secure() -> Result<Krb5Context, Krb5Error> {
-        let _guard = CONTEXT_INIT_LOCK
-            .lock()
-            .expect("Failed to lock context initialization.");
-
         let mut context_ptr: MaybeUninit<krb5_context> = MaybeUninit::zeroed();
 
-        let code: krb5_error_code = unsafe { krb5_init_secure_context(context_ptr.as_mut_ptr()) };
+        // The lock is only required around the libkrb5 initialisation call.
+        // It must be released before any early return, otherwise the
+        // `Drop for Krb5Context` triggered by `?` below would deadlock.
+        let code: krb5_error_code = {
+            let _guard = CONTEXT_INIT_LOCK
+                .lock()
+                .expect("Failed to lock context initialization.");
+
+            unsafe { krb5_init_secure_context(context_ptr.as_mut_ptr()) }
+        };
 
         let context = Krb5Context {
             context: unsafe { Rc::new(context_ptr.assume_init()) },
@@ -156,16 +166,21 @@ impl Krb5Context {
     /// caller retains ownership and the [`Krb5Profile`] may safely be
     /// dropped or reused afterwards.
     pub fn init_with_profile(profile: &Krb5Profile) -> Result<Krb5Context, Krb5Error> {
-        let _guard = CONTEXT_INIT_LOCK
-            .lock()
-            .expect("Failed to lock context initialization.");
-
         let mut context_ptr: MaybeUninit<krb5_context> = MaybeUninit::zeroed();
 
-        // SAFETY: profile.as_ptr() is a valid profile_t; context_ptr is a
-        // valid out pointer.
-        let code: krb5_error_code = unsafe {
-            krb5_init_context_profile(profile.as_ptr(), 0, context_ptr.as_mut_ptr())
+        // The lock is only required around the libkrb5 initialisation call.
+        // It must be released before any early return, otherwise the
+        // `Drop for Krb5Context` triggered by `?` below would deadlock.
+        let code: krb5_error_code = {
+            let _guard = CONTEXT_INIT_LOCK
+                .lock()
+                .expect("Failed to lock context initialization.");
+
+            // SAFETY: profile.as_ptr() is a valid profile_t; context_ptr is a
+            // valid out pointer.
+            unsafe {
+                krb5_init_context_profile(profile.as_ptr(), 0, context_ptr.as_mut_ptr())
+            }
         };
 
         let context = Krb5Context {
