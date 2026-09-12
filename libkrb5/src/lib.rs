@@ -32,6 +32,9 @@ pub use error::Krb5Error;
 mod principal;
 pub use principal::{Krb5Principal, Krb5PrincipalData};
 
+mod profile;
+pub use profile::Krb5Profile;
+
 mod strconv;
 
 #[allow(dead_code)]

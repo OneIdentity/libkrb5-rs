@@ -3,12 +3,14 @@ use core::slice;
 use nom::error::ErrorKind;
 use nom::number::complete::{be_u16, be_u64, be_u8, le_u32};
 use nom::{bytes::streaming::take, sequence::tuple};
+use std::cell::RefCell;
 use std::ffi::CStr;
 use std::fmt::{Debug, Formatter};
 use std::iter;
 use std::mem::MaybeUninit;
-use std::os::raw::c_char;
-use std::ptr::null;
+use std::os::raw::{c_char, c_void};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::Mutex;
 
@@ -19,6 +21,7 @@ use crate::ccache::Krb5CCache;
 use crate::credential::{Krb5Creds, Krb5Keyblock};
 use crate::error::{krb5_error_code_escape_hatch, Krb5Error};
 use crate::principal::Krb5Principal;
+use crate::profile::Krb5Profile;
 use crate::strconv::{c_string_to_string, string_to_c_string};
 
 pub use libkrb5_sys::{
@@ -93,9 +96,58 @@ pub enum Krb5AuthContextOptions {
     Integ = 32,
 }
 
+pub(crate) type Krb5TraceCallbackFn = Box<dyn Fn(&str) + Send + Sync>;
+
 #[derive(Clone, Debug)]
 pub struct Krb5Context {
+    pub(crate) trace_cb: Rc<RefCell<Option<TraceCallbackHolder>>>,
     pub(crate) context: Rc<krb5_context>,
+}
+
+pub struct TraceCallbackHolder {
+    context: krb5_context,
+    // The closure is kept alive here; libkrb5 stores a raw pointer to the inner Box.
+    _closure: Box<Krb5TraceCallbackFn>,
+}
+
+impl Debug for TraceCallbackHolder {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
+        f.debug_struct("TraceCallbackHolder").finish()
+    }
+}
+
+impl Drop for TraceCallbackHolder {
+    fn drop(&mut self) {
+        unsafe {
+            krb5_set_trace_callback(self.context, None, null_mut());
+        }
+    }
+}
+
+unsafe extern "C" fn trace_callback_trampoline(
+    _context: krb5_context,
+    info: *const krb5_trace_info,
+    cb_data: *mut c_void,
+) {
+    // libkrb5 calls the callback with info == NULL when the callback is being
+    // unregistered; ignore that case.
+    if info.is_null() || cb_data.is_null() {
+        return;
+    }
+
+    let msg_ptr = (*info).message;
+    if msg_ptr.is_null() {
+        return;
+    }
+
+    // Reborrow the boxed closure without taking ownership.
+    let closure: &Krb5TraceCallbackFn =
+        &*(cb_data as *const Krb5TraceCallbackFn);
+
+    let msg = CStr::from_ptr(msg_ptr).to_string_lossy();
+
+    // Never let a panic unwind across the FFI boundary into libkrb5.
+    let _ = catch_unwind(AssertUnwindSafe(|| closure(&msg)));
 }
 
 impl Drop for Krb5Context {
@@ -105,6 +157,9 @@ impl Drop for Krb5Context {
                 .lock()
                 .expect("Failed to lock context for de-initialization.");
 
+            // Unregister the trace callback while the context is still valid.
+            self.clear_trace_callback();
+
             unsafe { krb5_free_context(self.get_context()) };
         }
     }
@@ -112,15 +167,21 @@ impl Drop for Krb5Context {
 
 impl Krb5Context {
     pub fn init() -> Result<Krb5Context, Krb5Error> {
-        let _guard = CONTEXT_INIT_LOCK
-            .lock()
-            .expect("Failed to lock context initialization.");
-
         let mut context_ptr: MaybeUninit<krb5_context> = MaybeUninit::zeroed();
 
-        let code: krb5_error_code = unsafe { krb5_init_context(context_ptr.as_mut_ptr()) };
+        // The lock is only required around the libkrb5 initialisation call.
+        // It must be released before any early return, otherwise the
+        // `Drop for Krb5Context` triggered by `?` below would deadlock.
+        let code: krb5_error_code = {
+            let _guard = CONTEXT_INIT_LOCK
+                .lock()
+                .expect("Failed to lock context initialization.");
+
+            unsafe { krb5_init_context(context_ptr.as_mut_ptr()) }
+        };
 
         let context = Krb5Context {
+            trace_cb: Rc::new(RefCell::new(None)),
             context: unsafe { Rc::new(context_ptr.assume_init()) },
         };
 
@@ -130,15 +191,56 @@ impl Krb5Context {
     }
 
     pub fn init_secure() -> Result<Krb5Context, Krb5Error> {
-        let _guard = CONTEXT_INIT_LOCK
-            .lock()
-            .expect("Failed to lock context initialization.");
-
         let mut context_ptr: MaybeUninit<krb5_context> = MaybeUninit::zeroed();
 
-        let code: krb5_error_code = unsafe { krb5_init_secure_context(context_ptr.as_mut_ptr()) };
+        // The lock is only required around the libkrb5 initialisation call.
+        // It must be released before any early return, otherwise the
+        // `Drop for Krb5Context` triggered by `?` below would deadlock.
+        let code: krb5_error_code = {
+            let _guard = CONTEXT_INIT_LOCK
+                .lock()
+                .expect("Failed to lock context initialization.");
+
+            unsafe { krb5_init_secure_context(context_ptr.as_mut_ptr()) }
+        };
 
         let context = Krb5Context {
+            trace_cb: Rc::new(RefCell::new(None)),
+            context: unsafe { Rc::new(context_ptr.assume_init()) },
+        };
+
+        krb5_error_code_escape_hatch(&context, code)?;
+
+        Ok(context)
+    }
+
+    /// Initialise a Kerberos context using a caller-supplied profile
+    /// instead of reading `/etc/krb5.conf`.
+    ///
+    /// The profile is borrowed for the duration of the call: MIT krb5
+    /// duplicates it internally (via `krb5int_dup_profile`), so the
+    /// caller retains ownership and the [`Krb5Profile`] may safely be
+    /// dropped or reused afterwards.
+    pub fn init_with_profile(profile: &Krb5Profile) -> Result<Krb5Context, Krb5Error> {
+        let mut context_ptr: MaybeUninit<krb5_context> = MaybeUninit::zeroed();
+
+        // The lock is only required around the libkrb5 initialisation call.
+        // It must be released before any early return, otherwise the
+        // `Drop for Krb5Context` triggered by `?` below would deadlock.
+        let code: krb5_error_code = {
+            let _guard = CONTEXT_INIT_LOCK
+                .lock()
+                .expect("Failed to lock context initialization.");
+
+            // SAFETY: profile.as_ptr() is a valid profile_t; context_ptr is a
+            // valid out pointer.
+            unsafe {
+                krb5_init_context_profile(profile.as_ptr(), 0, context_ptr.as_mut_ptr())
+            }
+        };
+
+        let context = Krb5Context {
+            trace_cb: Rc::new(RefCell::new(None)),
             context: unsafe { Rc::new(context_ptr.assume_init()) },
         };
 
@@ -150,6 +252,53 @@ impl Krb5Context {
     //returns the reference counted krb5_context pointer
     pub fn get_context(&self) -> krb5_context {
         *Rc::as_ref(&self.context)
+    }
+
+    /// Register a callback that receives every libkrb5 trace line.
+    ///
+    /// Equivalent to setting `KRB5_TRACE=<file>` at process start, but the
+    /// caller decides what to do with each line (typically forward it to an
+    /// application log). Any previously registered callback is replaced.
+    ///
+    /// The callback runs synchronously on whichever thread issued the
+    /// underlying krb5 call, and must not itself invoke krb5 API on the same
+    /// context (reentrancy is not supported by libkrb5).
+    pub fn set_trace_callback<F>(&self, callback: F) -> Result<(), Krb5Error>
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        // Double-box: the outer Box gives us a stable heap address to hand to
+        // libkrb5 as `cb_data`; the inner Box<dyn Fn> is the type-erased
+        // closure.
+        let boxed: Box<Krb5TraceCallbackFn> = Box::new(Box::new(callback));
+        let cb_data = &*boxed as *const Krb5TraceCallbackFn as *mut c_void;
+
+        // Drop any previously registered callback first (its Drop unregisters
+        // at the libkrb5 level), then install the new one.
+        self.clear_trace_callback();
+
+        let code = unsafe {
+            krb5_set_trace_callback(
+                self.get_context(),
+                Some(trace_callback_trampoline),
+                cb_data,
+            )
+        };
+        krb5_error_code_escape_hatch(self, code)?;
+
+        *self.trace_cb.borrow_mut() = Some(TraceCallbackHolder {
+            context: self.get_context(),
+            _closure: boxed,
+        });
+
+        Ok(())
+    }
+
+    /// Unregister any trace callback previously installed with
+    /// [`set_trace_callback`].
+    pub fn clear_trace_callback(&self) {
+        // Dropping the holder unregisters the callback via libkrb5.
+        *self.trace_cb.borrow_mut() = None;
     }
 
     pub fn build_principal<'a>(&'a self, realm: &'a str, args: &'a [String]) -> Result<Krb5Principal, Krb5Error> {
