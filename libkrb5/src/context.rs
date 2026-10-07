@@ -472,7 +472,8 @@ impl Krb5Context {
         let tgs_options: krb5_flags = (KRB5_GC_FORWARDABLE | KRB5_GC_USER_USER) as i32;
 
         let second_ticket_buffer = unsafe {
-            let buffer = std::alloc::alloc_zeroed(std::alloc::Layout::for_value(second_ticket.as_slice()));
+            let buffer = libc::malloc(second_ticket.len()) as *mut u8;
+            assert!(!buffer.is_null() || second_ticket.is_empty(), "libc::malloc failed");
             std::ptr::copy_nonoverlapping(second_ticket.as_ptr(), buffer, second_ticket.len());
             buffer
         };
